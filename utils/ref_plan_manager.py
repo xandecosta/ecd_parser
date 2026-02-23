@@ -1,7 +1,7 @@
 import pandas as pd
 import os
 import shutil
-import io
+
 import json
 from typing import cast, Dict, List, Any
 
@@ -26,9 +26,6 @@ class RefPlanManager:
         self.filtered_meta_path = os.path.join(
             self.reference_dir, "ref_plan_filtered.csv"
         )
-        self.discovery_report_path = os.path.join(
-            self.reference_dir, "ref_plan_layout.xlsx"
-        )
         self.conflicts_report_path = os.path.join(
             self.analysis_dir, "structural_conflicts_report.csv"
         )
@@ -36,48 +33,142 @@ class RefPlanManager:
         # State for auditing
         self.conflicts: List[Dict[str, Any]] = []
 
+        # Mapeamento Estático O(1) de Tabelas para Códigos
+        self.table_to_cod_ref = {
+            "L100_A": "1",
+            "L300_A": "1",
+            "L300_R": "1",
+            "L100_B": "3",
+            "L300_B": "3",
+            "L100_C": "4",
+            "L300_C": "4",
+            "P100": "2",
+            "P150": "2",
+            "P150_R": "2",
+            "P100_B": "10",
+            "P150_B": "10",
+            "U100_A": "5",
+            "U150_A": "5",
+            "U100_B": "6",
+            "U150_B": "6",
+            "U100_C": "7",
+            "U150_C": "7",
+            "U100_D": "8",
+            "U150_D": "8",
+            "U100_E": "9",
+            "U150_E": "9",
+            "CONTASREF": "10",
+            "CONTASREF_BACEN": "20",
+            "CONTASREF_SUSEP": "20",
+            "CONTASREF_TSE": "10",
+        }
+
+    def get_cod_plan_ref(self, tabela: str) -> str:
+        """Mapeia o nome da tabela (ex: L100_A) para o respectivo COD_PLAN_REF usando tabela hash."""
+        return self.table_to_cod_ref.get(tabela.upper(), "UNKNOWN")
+
+    def _scan_raw_plans(self) -> pd.DataFrame:
+        """Realiza a varredura automática dos arquivos brutos na pasta raw_ref_plans."""
+        print(f"\nBuscando arquivos de planos referenciais em: {self.raw_data_dir}")
+        if not os.path.exists(self.raw_data_dir):
+            raise FileNotFoundError(f"Diretório não encontrado: {self.raw_data_dir}")
+
+        arquivos = os.listdir(self.raw_data_dir)
+        registros = []
+
+        for nome_arq in arquivos:
+            # Ignora pastas ou arquivos ocultos, foca apenas nos arquivos com delimitador $
+            caminho_completo = os.path.join(self.raw_data_dir, nome_arq)
+            if os.path.isdir(caminho_completo) or nome_arq.startswith("."):
+                continue
+
+            if "$" not in nome_arq:
+                continue
+
+            partes = nome_arq.split("$")
+            if len(partes) != 4:
+                continue
+
+            agrupador = partes[0]
+            nome_tabela_bruto = partes[1]
+            try:
+                versao = int(partes[2])
+            except ValueError:
+                versao = 1
+
+            # Processando Ano e Tipo de Tabela
+            if agrupador.startswith("SPEDCONTABIL_CONTAS_REFERENCIAIS"):
+                ano = "<2014"
+                if "CONTASREF" in nome_tabela_bruto:
+                    tabela_codigo = nome_tabela_bruto.replace("SPEDCONTABIL_", "")
+                else:
+                    tabela_codigo = "UNKNOWN"
+            elif agrupador.startswith("SPEDCONTABIL_DINAMICO_"):
+                ano = agrupador.replace("SPEDCONTABIL_DINAMICO_", "")
+                tabela_codigo = nome_tabela_bruto.replace("SPEDECF_DINAMICA_", "")
+            else:
+                continue
+
+            cod_plan_ref = self.get_cod_plan_ref(tabela_codigo)
+            if cod_plan_ref == "UNKNOWN":
+                continue  # Ignora tabelas que não são contabilizadas no nosso mapa
+
+            # Lendo a primeira linha para obter ESTRUTURA_COLUNAS
+            try:
+                with open(caminho_completo, "r", encoding="latin1") as f:
+                    cabecalho = f.readline().strip()
+            except Exception:
+                cabecalho = ""
+
+            registros.append(
+                {
+                    "TabelaDinamica": nome_arq,
+                    "CodigoTabDinamica": tabela_codigo,
+                    "VersaoTabDinamica": versao,
+                    "Ano": ano,
+                    "COD_PLAN_REF": cod_plan_ref,
+                    "ESTRUTURA_COLUNAS": cabecalho,
+                }
+            )
+
+        df = pd.DataFrame(registros)
+        print(
+            f"Arquivos válidos identificados na varredura: {len(df) if not df.empty else 0}"
+        )
+        return df
+
     def filter_metadata(self) -> pd.DataFrame:
         """
-        Reads the full metadata CSV, filters for the latest version of each plan/year,
-        saves the result to disk, and returns the DataFrame.
+        Escaneia os arquivos dinamicamente, mantendo a maior versão de cada tabela/ano,
+        e salva a versão filtrada como histórico no diretório base.
         """
-        print(f"Reading metadata from: {self.full_meta_path}")
+        df = self._scan_raw_plans()
 
-        if not os.path.exists(self.full_meta_path):
-            raise FileNotFoundError(f"Source file not found: {self.full_meta_path}")
+        if df.empty:
+            raise ValueError("Nenhum arquivo de plano referencial válido encontrado.")
 
-        df = cast(
-            pd.DataFrame,
-            pd.read_csv(self.full_meta_path, sep=";", encoding="utf-8-sig"),
-        )
-
-        required_cols = ["CodigoTabDinamica", "Ano", "VersaoTabDinamica"]
-        if not all(col in df.columns for col in required_cols):
-            raise ValueError(f"Missing columns in metadata. Expected {required_cols}")
-
-        print(f"Original row count: {len(df)}")
-
-        # Sort: Ascending keys, Descending Version
+        # Ordena para pegar a maior versão: Ascending keys, Descending Version
         df_sorted = df.sort_values(
             by=["CodigoTabDinamica", "Ano", "VersaoTabDinamica"],
             ascending=[True, True, False],
         )
 
-        # Keep only the first (highest version) for each group
+        # Remove duplicados mantendo a primeira ocorrência (que é a maior versão graças à ordenação)
         df_filtered = df_sorted.drop_duplicates(
             subset=["CodigoTabDinamica", "Ano"], keep="first"
         ).copy()
 
         df_filtered.sort_values(by=["CodigoTabDinamica", "Ano"], inplace=True)
 
-        print(f"Filtered row count: {len(df_filtered)}")
+        print(
+            f"Metadados otimizados. Tabelas únicas que serão agrupadas: {len(df_filtered)}"
+        )
 
-        # Save filtered file
+        # Salva o resultado filtrado para fins de relatório/logging (como o sistema antigo fazia)
         os.makedirs(self.reference_dir, exist_ok=True)
         df_filtered.to_csv(
             self.filtered_meta_path, sep=";", index=False, encoding="utf-8-sig"
         )
-        print(f"Saved filtered metadata: {self.filtered_meta_path}")
 
         return df_filtered
 
@@ -115,6 +206,91 @@ class RefPlanManager:
         except ValueError:
             return 0
 
+    def _clean_unified_dataframe(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Aplica pipelines de limpeza e padronização (ETL) no dataframe."""
+        # Remove duplicidade de códigos que possam existir entre planos
+        df.drop_duplicates(subset=["CODIGO"], keep="first", inplace=True)
+
+        if "NATUREZA" in df.columns:
+            df["NATUREZA"] = df["NATUREZA"].apply(
+                lambda x: str(x).zfill(2) if x and str(x).strip() else ""
+            )
+        if "DESCRICAO" in df.columns:
+            df["DESCRICAO"] = df["DESCRICAO"].str.strip()
+
+        return df
+
+    def _read_raw_plan_file(self, file_path: str, estrutura: str) -> pd.DataFrame:
+        """Determina as colunas com base na estrutura e lê o arquivo bruto otimizado."""
+        # Fix 3: Desacopla as tipagens da estrutura com blocos mais limpos
+        if "ORDEM" in estrutura:
+            cols = [
+                "CODIGO",
+                "DESCRICAO",
+                "DT_INI",
+                "DT_FIM",
+                "ORDEM",
+                "TIPO",
+                "COD_SUP",
+                "NIVEL",
+                "NATUREZA",
+            ]
+        else:
+            cols = [
+                "CODIGO",
+                "DESCRICAO",
+                "DT_INI",
+                "DT_FIM",
+                "TIPO",
+                "COD_SUP",
+                "NIVEL",
+                "NATUREZA",
+                "UTILIZACAO",
+            ]
+
+        try:
+            # Fix 4: Removed engine='python' logic to fallback into the lightning fast C-engine safely
+            return pd.read_csv(
+                file_path,
+                sep="|",
+                names=cols,
+                header=None,
+                skiprows=1,
+                dtype=str,
+                encoding="latin1",
+                quoting=3,
+                index_col=False,
+            ).fillna("")
+        except Exception as e:
+            print(f"      Erro ao ler bruto {file_path}: {e}")
+            return pd.DataFrame()
+
+    def _update_catalog_dict(
+        self,
+        catalog: Dict[str, Any],
+        cod_ref: str,
+        ano_str: str,
+        info_versao: str,
+        output_filename: str,
+        layout_type: str,
+    ):
+        ano_min, ano_max = self.parse_ano_range(ano_str)
+        if cod_ref not in catalog:
+            catalog[cod_ref] = {}
+
+        catalog[cod_ref][ano_str] = {
+            "range": [ano_min, ano_max],
+            "plans": {
+                "REF": {
+                    info_versao: {
+                        "file": output_filename,
+                        "tipo_demo": "Unificado (Balanço + Resultado)",
+                        "layout": layout_type,
+                    }
+                }
+            },
+        }
+
     def standardize_plans(self):
         """
         Lê os metadados filtrados, agrupa por COD_PLAN_REF + Ano,
@@ -129,7 +305,7 @@ class RefPlanManager:
         # 1. Limpeza da pasta de schemas/data
         if os.path.exists(self.schemas_dir):
             print(f"Limpando pasta de schemas: {self.schemas_dir}")
-            shutil.rmtree(self.schemas_dir)
+            shutil.rmtree(self.schemas_dir, ignore_errors=True)
         os.makedirs(self.schemas_dir, exist_ok=True)
 
         catalog: Dict[str, Any] = {}
@@ -158,73 +334,22 @@ class RefPlanManager:
                 if "ORDEM" in estrutura:
                     layout_type = "ref_dynamic"
 
-                # Define colunas
-                if "ORDEM" in estrutura:
-                    cols = [
-                        "CODIGO",
-                        "DESCRICAO",
-                        "DT_INI",
-                        "DT_FIM",
-                        "ORDEM",
-                        "TIPO",
-                        "COD_SUP",
-                        "NIVEL",
-                        "NATUREZA",
-                    ]
-                else:
-                    cols = [
-                        "CODIGO",
-                        "DESCRICAO",
-                        "DT_INI",
-                        "DT_FIM",
-                        "TIPO",
-                        "COD_SUP",
-                        "NIVEL",
-                        "NATUREZA",
-                        "UTILIZACAO",
-                    ]
-
                 file_path = os.path.join(self.raw_data_dir, file_name)
-                if not os.path.exists(file_path) and os.path.exists(file_path + ".txt"):
-                    file_path += ".txt"
-
+                # O arquivo já possui a nomenclatura original do disco (sem extensão obrigatória)
                 if not os.path.exists(file_path):
                     continue
 
-                try:
-                    with open(file_path, "r", encoding="latin1") as f:
-                        lines = f.readlines()
-                        if not lines:
-                            continue
-                        content = "".join(lines[1:])
+                # Fix 2: Função Deus extraída e mitigada (Isolamento da Responsabilidade de Leitura)
+                df_part = self._read_raw_plan_file(file_path, estrutura)
 
-                    df_part = pd.read_csv(
-                        io.StringIO(content),
-                        sep="|",
-                        names=cols,
-                        header=None,
-                        dtype=str,
-                        engine="python",
-                        quoting=3,
-                        index_col=False,
-                    ).fillna("")
-
+                if not df_part.empty:
                     dfs_unificados.append(df_part)
-                except Exception as e:
-                    print(f"      Erro ao ler {file_name}: {e}")
 
             if dfs_unificados:
                 df_final = pd.concat(dfs_unificados, ignore_index=True)
-                # Remove duplicidade de códigos que possam existir entre planos
-                df_final.drop_duplicates(subset=["CODIGO"], keep="first", inplace=True)
 
-                # Limpeza Padrão
-                if "NATUREZA" in df_final.columns:
-                    df_final["NATUREZA"] = df_final["NATUREZA"].apply(
-                        lambda x: str(x).zfill(2) if x and str(x).strip() else ""
-                    )
-                if "DESCRICAO" in df_final.columns:
-                    df_final["DESCRICAO"] = df_final["DESCRICAO"].str.strip()
+                # Executa a limpeza extraída
+                df_final = self._clean_unified_dataframe(df_final)
 
                 # Nome unificado: REF_{Instituicao}_{Ano}.csv
                 output_filename = f"REF_{cod_ref}_{ano_str}.csv".replace(
@@ -232,28 +357,16 @@ class RefPlanManager:
                 ).replace("<", "LT")
                 output_path = os.path.join(self.schemas_dir, output_filename)
 
+                os.makedirs(self.schemas_dir, exist_ok=True)
                 df_final.to_csv(output_path, sep="|", index=False, encoding="utf-8")
 
                 # Atualiza Catálogo
-                ano_min, ano_max = self.parse_ano_range(ano_str)
-
-                if cod_ref not in catalog:
-                    catalog[cod_ref] = {}
-
-                catalog[cod_ref][ano_str] = {
-                    "range": [ano_min, ano_max],
-                    "plans": {
-                        "REF": {
-                            info_versao: {
-                                "file": output_filename,
-                                "tipo_demo": "Unificado (Balanço + Resultado)",
-                                "layout": layout_type,
-                            }
-                        }
-                    },
-                }
+                self._update_catalog_dict(
+                    catalog, cod_ref, ano_str, info_versao, output_filename, layout_type
+                )
 
         # Save Catalog JSON
+        os.makedirs(os.path.dirname(self.catalog_path), exist_ok=True)
         with open(self.catalog_path, "w", encoding="utf-8") as f:
             json.dump(catalog, f, indent=2, ensure_ascii=False)
 
@@ -307,10 +420,7 @@ class RefPlanManager:
             years_list.sort(key=lambda x: x[0])
 
             for y_val, year_key in years_list:
-                # Skip ancient history if desired, matching logic from previous scripts
-                if y_val < 2014:
-                    continue
-
+                # Fix 1: Permite rastreio e auditoria oficial de arquivos legados estruturais (< 2014) removendo o 'continue'
                 ano_str = str(year_key)
                 # Reconstrói o nome do arquivo unificado conforme lógica do standardize_plans
                 unified_filename = f"REF_{cod_ref}_{ano_str}.csv".replace(
@@ -368,28 +478,22 @@ class RefPlanManager:
         df: pd.DataFrame,
         knowledge_base: Dict[str, Dict[str, Any]],
     ):
-        """Compares current year's accounts against the knowledge base."""
-        for _, account in df.iterrows():
-            code = str(account.get("CODIGO", ""))
+        """Compares current year's accounts against the knowledge base usando fast iteration."""
+        for row in df.itertuples(index=False):
+            code_val = getattr(row, "CODIGO", "")
+            code = str(code_val).strip() if pd.notna(code_val) else ""
             if not code:
                 continue
 
             # Normalize fields
-            cod_sup = (
-                str(account.get("COD_SUP", ""))
-                if pd.notna(cast(Any, account.get("COD_SUP")))
-                else ""
-            )
-            natureza = (
-                str(account.get("NATUREZA", ""))
-                if pd.notna(cast(Any, account.get("NATUREZA")))
-                else ""
-            )
-            tipo = (
-                str(account.get("TIPO", ""))
-                if pd.notna(cast(Any, account.get("TIPO")))
-                else ""
-            )
+            sup_val = getattr(row, "COD_SUP", "")
+            cod_sup = str(sup_val).strip() if pd.notna(sup_val) else ""
+
+            nat_val = getattr(row, "NATUREZA", "")
+            natureza = str(nat_val).strip() if pd.notna(nat_val) else ""
+
+            tipo_val = getattr(row, "TIPO", "")
+            tipo = str(tipo_val).strip() if pd.notna(tipo_val) else ""
 
             if code in knowledge_base:
                 prev = knowledge_base[code]
@@ -454,53 +558,43 @@ class RefPlanManager:
     def _generate_evolution_report(
         self, cod_ref: str, yearly_data: Dict[str, pd.DataFrame]
     ):
-        """Generates the wide-format CSV matrix for account evolution."""
-        all_codes = set()
-        for year in yearly_data:
-            all_codes.update(cast(pd.Series, yearly_data[year].index).tolist())
-
-        if not all_codes:
+        """Generates the wide-format CSV matrix for account evolution using Vectorized Ops."""
+        if not yearly_data:
             print("  No data found for evolution report.")
             return
 
-        print(f"  Generating evolution report for {len(all_codes)} accounts...")
-
-        comparison_rows: List[Dict[str, Any]] = []
-
-        # Sort years numerically for columns
         years_sorted = sorted(yearly_data.keys(), key=self.parse_year_safe)
 
-        for code in sorted(list(all_codes)):
-            row: Dict[str, Any] = {"CODIGO": code}
-            canonical_info: Dict[str, Any] = {}
+        # 1. Empilhar todos os anos para extrair o index global e dados canônicos
+        all_dfs = []
+        for y in years_sorted:
+            df_y = yearly_data[y].copy()
+            df_y["_ANO_REF"] = self.parse_year_safe(y)
+            all_dfs.append(df_y)
 
-            # Find most recent info (traverse backwards)
-            for year in reversed(years_sorted):
-                if code in yearly_data[year].index:
-                    data = cast(pd.Series, yearly_data[year].loc[code])
-                    canonical_info = {
-                        "DESCRICAO": data.get("DESCRICAO", ""),
-                        "NIVEL": data.get("NIVEL", ""),
-                        "NATUREZA": data.get("NATUREZA", ""),
-                        "TIPO": data.get("TIPO", ""),
-                        "COD_SUP": data.get("COD_SUP", ""),
-                    }
-                    break
-            row.update(canonical_info)
+        df_concat = pd.concat(all_dfs).reset_index()
 
-            # Fill year columns
-            for year in years_sorted:
-                if code in yearly_data[year].index:
-                    desc = cast(pd.Series, yearly_data[year].loc[code]).get(
-                        "DESCRICAO", "SIM"
-                    )
-                    row[f"ANO_{year}"] = desc
-                else:
-                    row[f"ANO_{year}"] = None
+        print(
+            f"  Generating evolution report for {df_concat['CODIGO'].nunique()} accounts..."
+        )
 
-            comparison_rows.append(row)
+        # 2. Informações canônicas: Pega a versão mais recente e os metadados dela
+        df_canonical = df_concat.sort_values("_ANO_REF").drop_duplicates(
+            subset=["CODIGO"], keep="last"
+        )
 
-        df_comparison = cast(pd.DataFrame, pd.DataFrame(comparison_rows))
+        # Mantém apenas as colunas base de comparação
+        base_cols_all = ["CODIGO", "DESCRICAO", "TIPO", "COD_SUP", "NIVEL", "NATUREZA"]
+        existing_base = [c for c in base_cols_all if c in df_canonical.columns]
+        df_comparison = cast(pd.DataFrame, df_canonical[existing_base].copy())
+
+        # 3. Adiciona as colunas anuais mapeando em escala vetorial (O(N) limpo)
+        for year in years_sorted:
+            s_desc = cast(pd.Series, yearly_data[year]["DESCRICAO"])
+            # Mapeia valores e trata missing como NaN
+            df_comparison[f"ANO_{year}"] = cast(pd.Series, df_comparison["CODIGO"]).map(
+                s_desc
+            )
 
         # Enforce Column Order requested by User
         base_cols = [
@@ -516,7 +610,7 @@ class RefPlanManager:
 
         # Select only existing columns to be safe
         existing_cols = [c for c in final_cols if c in df_comparison.columns]
-        df_comparison = df_comparison[existing_cols]
+        df_comparison = cast(pd.DataFrame, df_comparison[existing_cols])
 
         safe_cod = str(cod_ref).strip()
         output_path = os.path.join(
@@ -539,34 +633,6 @@ class RefPlanManager:
                 self.conflicts_report_path, sep="|", index=False, encoding="utf-8-sig"
             )
             print(f"Conflict report saved to: {self.conflicts_report_path}")
-
-    def discover_layouts(self):
-        """
-        Scans the raw data directory and creates an Excel report of the file headers.
-        Useful for debugging layout changes.
-        """
-        print(f"Scanning raw files in {self.raw_data_dir}...")
-
-        if not os.path.exists(self.raw_data_dir):
-            print(f"Error: Directory {self.raw_data_dir} not found.")
-            return
-
-        arquivos = [f for f in os.listdir(self.raw_data_dir) if f.endswith(".txt")]
-        dados = []
-
-        for nome_arq in arquivos:
-            caminho = os.path.join(self.raw_data_dir, nome_arq)
-            try:
-                with open(caminho, "r", encoding="latin1") as f:
-                    primeira_linha = f.readline().strip()
-                    dados.append({"Arquivo": nome_arq, "Cabecalho": primeira_linha})
-            except Exception as e:
-                dados.append({"Arquivo": nome_arq, "Cabecalho": f"ERRO: {e}"})
-
-        df = cast(pd.DataFrame, pd.DataFrame(dados))
-        os.makedirs(os.path.dirname(self.discovery_report_path), exist_ok=True)
-        df.to_excel(self.discovery_report_path, index=False, engine="openpyxl")
-        print(f"Discovery report generated: {self.discovery_report_path}")
 
 
 if __name__ == "__main__":

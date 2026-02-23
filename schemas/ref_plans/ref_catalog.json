@@ -105,17 +105,124 @@
         }
       }
     },
-    ">=2021": {
+    "2021": {
       "range": [
         2021,
-        9999
+        2021
       ],
       "plans": {
         "REF": {
           "4": {
-            "file": "REF_1_GE2021.csv",
+            "file": "REF_1_2021.csv",
             "tipo_demo": "Unificado (Balanço + Resultado)",
             "layout": "ref_dynamic"
+          }
+        }
+      }
+    }
+  },
+  "10": {
+    "2016": {
+      "range": [
+        2016,
+        2016
+      ],
+      "plans": {
+        "REF": {
+          "1": {
+            "file": "REF_10_2016.csv",
+            "tipo_demo": "Unificado (Balanço + Resultado)",
+            "layout": "ref_dynamic"
+          }
+        }
+      }
+    },
+    "2017": {
+      "range": [
+        2017,
+        2017
+      ],
+      "plans": {
+        "REF": {
+          "3": {
+            "file": "REF_10_2017.csv",
+            "tipo_demo": "Unificado (Balanço + Resultado)",
+            "layout": "ref_dynamic"
+          }
+        }
+      }
+    },
+    "2018": {
+      "range": [
+        2018,
+        2018
+      ],
+      "plans": {
+        "REF": {
+          "1": {
+            "file": "REF_10_2018.csv",
+            "tipo_demo": "Unificado (Balanço + Resultado)",
+            "layout": "ref_dynamic"
+          }
+        }
+      }
+    },
+    "2019": {
+      "range": [
+        2019,
+        2019
+      ],
+      "plans": {
+        "REF": {
+          "1": {
+            "file": "REF_10_2019.csv",
+            "tipo_demo": "Unificado (Balanço + Resultado)",
+            "layout": "ref_dynamic"
+          }
+        }
+      }
+    },
+    "2020": {
+      "range": [
+        2020,
+        2020
+      ],
+      "plans": {
+        "REF": {
+          "2": {
+            "file": "REF_10_2020.csv",
+            "tipo_demo": "Unificado (Balanço + Resultado)",
+            "layout": "ref_dynamic"
+          }
+        }
+      }
+    },
+    "2021": {
+      "range": [
+        2021,
+        2021
+      ],
+      "plans": {
+        "REF": {
+          "12": {
+            "file": "REF_10_2021.csv",
+            "tipo_demo": "Unificado (Balanço + Resultado)",
+            "layout": "ref_dynamic"
+          }
+        }
+      }
+    },
+    "<2014": {
+      "range": [
+        0,
+        2013
+      ],
+      "plans": {
+        "REF": {
+          "1": {
+            "file": "REF_10_LT2014.csv",
+            "tipo_demo": "Unificado (Balanço + Resultado)",
+            "layout": "ref_standard"
           }
         }
       }
@@ -227,17 +334,34 @@
         }
       }
     },
-    ">=2021": {
+    "2021": {
       "range": [
         2021,
-        9999
+        2021
       ],
       "plans": {
         "REF": {
           "4": {
-            "file": "REF_2_GE2021.csv",
+            "file": "REF_2_2021.csv",
             "tipo_demo": "Unificado (Balanço + Resultado)",
             "layout": "ref_dynamic"
+          }
+        }
+      }
+    }
+  },
+  "20": {
+    "<2014": {
+      "range": [
+        0,
+        2013
+      ],
+      "plans": {
+        "REF": {
+          "1": {
+            "file": "REF_20_LT2014.csv",
+            "tipo_demo": "Unificado (Balanço + Resultado)",
+            "layout": "ref_standard"
           }
         }
       }
@@ -349,15 +473,15 @@
         }
       }
     },
-    ">=2021": {
+    "2021": {
       "range": [
         2021,
-        9999
+        2021
       ],
       "plans": {
         "REF": {
           "16": {
-            "file": "REF_3_GE2021.csv",
+            "file": "REF_3_2021.csv",
             "tipo_demo": "Unificado (Balanço + Resultado)",
             "layout": "ref_dynamic"
           }
@@ -471,15 +595,15 @@
         }
       }
     },
-    ">=2021": {
+    "2021": {
       "range": [
         2021,
-        9999
+        2021
       ],
       "plans": {
         "REF": {
           "4": {
-            "file": "REF_4_GE2021.csv",
+            "file": "REF_4_2021.csv",
             "tipo_demo": "Unificado (Balanço + Resultado)",
             "layout": "ref_dynamic"
           }
@@ -593,15 +717,15 @@
         }
       }
     },
-    ">=2021": {
+    "2021": {
       "range": [
         2021,
-        9999
+        2021
       ],
       "plans": {
         "REF": {
           "4": {
-            "file": "REF_5_GE2021.csv",
+            "file": "REF_5_2021.csv",
             "tipo_demo": "Unificado (Balanço + Resultado)",
             "layout": "ref_dynamic"
           }
@@ -715,15 +839,15 @@
         }
       }
     },
-    ">=2021": {
+    "2021": {
       "range": [
         2021,
-        9999
+        2021
       ],
       "plans": {
         "REF": {
           "10": {
-            "file": "REF_6_GE2021.csv",
+            "file": "REF_6_2021.csv",
             "tipo_demo": "Unificado (Balanço + Resultado)",
             "layout": "ref_dynamic"
           }
@@ -837,15 +961,15 @@
         }
       }
     },
-    ">=2021": {
+    "2021": {
       "range": [
         2021,
-        9999
+        2021
       ],
       "plans": {
         "REF": {
           "4": {
-            "file": "REF_7_GE2021.csv",
+            "file": "REF_7_2021.csv",
             "tipo_demo": "Unificado (Balanço + Resultado)",
             "layout": "ref_dynamic"
           }
@@ -959,15 +1083,15 @@
         }
       }
     },
-    ">=2021": {
+    "2021": {
       "range": [
         2021,
-        9999
+        2021
       ],
       "plans": {
         "REF": {
           "5": {
-            "file": "REF_8_GE2021.csv",
+            "file": "REF_8_2021.csv",
             "tipo_demo": "Unificado (Balanço + Resultado)",
             "layout": "ref_dynamic"
           }
@@ -1081,141 +1205,17 @@
         }
       }
     },
-    ">=2021": {
+    "2021": {
       "range": [
         2021,
-        9999
+        2021
       ],
       "plans": {
         "REF": {
           "7": {
-            "file": "REF_9_GE2021.csv",
+            "file": "REF_9_2021.csv",
             "tipo_demo": "Unificado (Balanço + Resultado)",
             "layout": "ref_dynamic"
-          }
-        }
-      }
-    }
-  },
-  "10": {
-    "2016": {
-      "range": [
-        2016,
-        2016
-      ],
-      "plans": {
-        "REF": {
-          "1": {
-            "file": "REF_10_2016.csv",
-            "tipo_demo": "Unificado (Balanço + Resultado)",
-            "layout": "ref_dynamic"
-          }
-        }
-      }
-    },
-    "2017": {
-      "range": [
-        2017,
-        2017
-      ],
-      "plans": {
-        "REF": {
-          "3": {
-            "file": "REF_10_2017.csv",
-            "tipo_demo": "Unificado (Balanço + Resultado)",
-            "layout": "ref_dynamic"
-          }
-        }
-      }
-    },
-    "2018": {
-      "range": [
-        2018,
-        2018
-      ],
-      "plans": {
-        "REF": {
-          "1": {
-            "file": "REF_10_2018.csv",
-            "tipo_demo": "Unificado (Balanço + Resultado)",
-            "layout": "ref_dynamic"
-          }
-        }
-      }
-    },
-    "2019": {
-      "range": [
-        2019,
-        2019
-      ],
-      "plans": {
-        "REF": {
-          "1": {
-            "file": "REF_10_2019.csv",
-            "tipo_demo": "Unificado (Balanço + Resultado)",
-            "layout": "ref_dynamic"
-          }
-        }
-      }
-    },
-    "2020": {
-      "range": [
-        2020,
-        2020
-      ],
-      "plans": {
-        "REF": {
-          "2": {
-            "file": "REF_10_2020.csv",
-            "tipo_demo": "Unificado (Balanço + Resultado)",
-            "layout": "ref_dynamic"
-          }
-        }
-      }
-    },
-    "<2014": {
-      "range": [
-        0,
-        2013
-      ],
-      "plans": {
-        "REF": {
-          "1": {
-            "file": "REF_10_LT2014.csv",
-            "tipo_demo": "Unificado (Balanço + Resultado)",
-            "layout": "ref_standard"
-          }
-        }
-      }
-    },
-    ">=2021": {
-      "range": [
-        2021,
-        9999
-      ],
-      "plans": {
-        "REF": {
-          "12": {
-            "file": "REF_10_GE2021.csv",
-            "tipo_demo": "Unificado (Balanço + Resultado)",
-            "layout": "ref_dynamic"
-          }
-        }
-      }
-    }
-  },
-  "20": {
-    "<2014": {
-      "range": [
-        0,
-        2013
-      ],
-      "plans": {
-        "REF": {
-          "1": {
-            "file": "REF_20_LT2014.csv",
-            "tipo_demo": "Unificado (Balanço + Resultado)",
-            "layout": "ref_standard"
           }
         }
       }

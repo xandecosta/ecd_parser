@@ -12,6 +12,7 @@ Arquivos ECD são documentos complexos que as empresas enviam ao governo (Receit
 2. **Ponte Virtual**: Recupera informações de anos vizinhos para completar dados que faltam em arquivos antigos (como o ano de 2014).
 3. **Visão da Receita Federal**: Transforma a contabilidade da empresa no formato que o governo exige (Plano Referencial).
 4. **Consolidação Inteligente**: Junta vários anos em um único resumo para você ver a "saúde" da empresa ao longo do tempo.
+5. **Máxima Performance (O(1))**: Núcleo vetorial refatorado para processar milhares de contas via C-engine sem asfixiar a sua memória RAM.
 
 ---
 
@@ -36,7 +37,7 @@ pip install -r requirements.txt
 
 Siga estes dois passos simples:
 
-1. **Preparar Planos do Governo**: Rode o gestor de tabelas (só precisa rodar uma vez ou quando mudar algo na RFB):
+1. **Preparar Planos do Governo**: Rode o veloz gestor de tabelas para que o robô escaneie eficientemente a pasta de metadados brutos via C-engine e construa todos os catálogos base:
 
     ```bash
     python utils/ref_plan_manager.py

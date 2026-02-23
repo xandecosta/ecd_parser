@@ -120,23 +120,23 @@ Utiliza métodos estatísticos e detecção de anomalias temporais.
 ### 5.1 Inversão de Natureza
 
 **Objetivo**: Detectar saldos anômalos (Ativo Credor ou Passivo Devedor).
-- **Lógica**: Identifica Ativo < 0 ou Passivo > 0, ignorando contas redutoras (ex: depreciasão, amortisação).
+**Lógica**: Identifica Ativo < 0 ou Passivo > 0, ignorando contas redutoras (ex: depreciasão, amortisação).
 
 ### 5.2 Estouro de Caixa
 
 **Objetivo**: Identificar momentos em que as contas de disponibilidade ficaram com saldo credor.
-- **Lógica**: Filtra contas de Caixa/Bancos (via Nome ou Referencial 1.01.01) e reporta qualquer saldo final negativo no mês.
+**Lógica**: Filtra contas de Caixa/Bancos (via Nome ou Referencial 1.01.01) e reporta qualquer saldo final negativo no mês.
 
 ### 5.3 Passivo Fictício (Estaticidade)
 
 **Objetivo**: Identificar obrigações que permanecem no balancete sem qualquer movimentação no ano.
-- **Lógica**: Identifica contas de natureza `02` com saldo > R$ 1.000,00 que tiveram **zero** movimentação de débito e crédito no exercício.
+**Lógica**: Identifica contas de natureza `02` com saldo > R$ 1.000,00 que tiveram **zero** movimentação de débito e crédito no exercício.
 
 ### 5.4 Consistência PL vs. Resultado
 
 **Objetivo**: Validar a amarração técnica entre lucro da DRE e transferência para o PL.
-- **Lógica**: Compara o Lucro Líquido da DRE com o valor total dos lançamentos 'E' que atingiram o Patrimônio Líquido.
-- **Tolerância**: Admite divergência de até **R$ 100,00** para arredondamentos.
+**Lógica**: Compara o Lucro Líquido da DRE com o valor total dos lançamentos 'E' que atingiram o Patrimônio Líquido.
+**Tolerância**: Admite divergência de até **R$ 100,00** para arredondamentos.
 
 ---
 

@@ -3,6 +3,29 @@
 Todas as mudanças notáveis neste projeto serão documentadas neste arquivo.
 O formato é baseado em [Keep a Changelog](https://keepachangelog.com/pt-br/1.0.0/).
 
+## [2.4.0] - 2026-02-23
+
+### Alterado [2.4.0]
+
+- **Refatoração Ouro de Performance:** Reescrita arquitetural profunda do `ref_plan_manager.py`, focada na brutal redução de uso de RAM e legibilidade (*Clean Code*).
+- **I/O Otimizado:** Substituição da leitura engarrafada por iteração via `pd.read_csv`, acoplado ao motor C nativo superveloz.
+- **Tabelas Hash O(1):** Mapeamento estático do Plano Referencial, aposentando longos laços procedurais com dezenas de `ifs`.
+- **Pipeline Vetorial:** Geração de relatórios de evolução inteiramente reescritos usando funções hiper-rápidas como `pd.concat` e `.map`, abolindo os obsoletos laços de duplo lookup.
+- **Design Patterns (SRP):** Extração da lógica massiva de higienização de dados em pipelines autônomos (ex: `_clean_unified_dataframe`).
+- **Resiliência Windows:** Blindagem sistêmica injetada para ignorar "Acesso Negado" e bloqueios invisíveis de sincronizadores do Google Drive/OneDrive sobre pastas físicas apagadas simultaneamente.
+- **Auditoria Histórica:** Retirada da trava explícita que bloqueava o rastreio formal de balancetes antigos (anteriores a 2014), liberando rastreamento da matriz referencial legada `CONTASREF`.
+
+## [2.3.0] - 2026-02-23
+
+### Adicionado [2.3.0]
+
+- **Automação de Planos Referenciais:** O script `ref_plan_manager.py` foi refatorado para varrer o diretório bruto da Receita Federal e criar o catálogo oficial (`ref_catalog.json`) de forma autônoma baseada em Expressões Regulares (Regex Dinâmico).
+
+### Removido [2.3.0]
+
+- Eliminação do arquivo estático `ref_plan_full.csv` que exigia atualização manual para novas tabelas do governo.
+- Remoção da pasta duplicada e redundante `raw_ref_plans_2`.
+
 ## [2.2.0] - 2026-01-27
 
 ### Adicionado [2.2.0]

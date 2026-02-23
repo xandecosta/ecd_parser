@@ -41,7 +41,7 @@ Arquivos que ajudam na organização e finalização dos dados.
 - **`exporter.py`**: O "Formatador". Garante que o Excel saia com vírgulas e datas no padrão brasileiro.
 - **`audit_exporter.py`**: Especialista em relatórios de auditoria, criando as abas de Scorecard e evidências.
 - **`consolidator.py`**: O "Agregador". Ele junta os resultados de vários anos em um único arquivo consolidado.
-- **`ref_plan_manager.py`**: O "Bibliotecário". Gerencia e baixa os planos de contas oficiais da Receita Federal.
+- **`ref_plan_manager.py`**: O "Bibliotecário Automático". Escaneia ultrarrapidamente diretórios brutos da RFB e constrói amarrações do plano sem metadados estáticos via motor vetorial O(1), aplicando robusta auditoria de evolução de contas.
 - **`historical_mapper.py`**: O "Cérebro da Ponte". Aprende com anos passados para preencher falhas em arquivos antigos.
 
 ### 📂 Pasta `/docs/` (A Enciclopédia Técnica)
