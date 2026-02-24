@@ -2,162 +2,129 @@ import pandas as pd
 import json
 import os
 import logging
-from typing import cast, Dict, Any
+import shutil
+from typing import Dict, Any, cast
 
 # Configuração de Logs
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 
-INPUT_CAMPOS = r"data/reference/campos_por_registros.csv"
-INPUT_REGISTROS = r"data/reference/registros_por_leiaute.csv"
-OUTPUT_DIR = r"schemas/ecd_layouts"
+# Configurações de Caminho (Podem ser injetadas no futuro)
+_INPUT_CAMPOS = r"data/reference/ref_plan_fields_by_register.csv"
+_INPUT_REGISTROS = r"data/reference/ref_plan_registers_by_layout.csv"
+_OUTPUT_DIR = r"schemas/ecd_layouts"
+
+
+def _load_and_clean_csv(path: str) -> pd.DataFrame:
+    """Carrega CSV com tratamento de encoding e limpeza de strings."""
+    if not os.path.exists(path):
+        raise FileNotFoundError(f"Arquivo de referência não encontrado: {path}")
+
+    df = pd.read_csv(path, sep=";", encoding="utf-8-sig", dtype=str)
+    # Normaliza nomes de colunas (strip)
+    df.columns = pd.Index([str(c).strip() for c in df.columns])
+    # Limpa espaços em branco em todas as células de texto
+    return cast(
+        pd.DataFrame, df.apply(lambda x: x.str.strip() if x.dtype == "object" else x)
+    )
+
+
+def _safe_int_convert(series: pd.Series, default: int = 0) -> pd.Series:
+    """Converte série para inteiro de forma resiliente."""
+    # Trata placeholders comuns da RFB antes da conversão
+    s_clean = series.replace({"-": "0", "": str(default), None: str(default)})
+    return (
+        cast(pd.Series, pd.to_numeric(s_clean, errors="coerce"))
+        .fillna(default)
+        .astype(int)
+    )
 
 
 def compile_ecd_layouts():
     """
-    Lê os CSVs de parâmetros e gera arquivos JSON por versão de layout,
-    incluindo a hierarquia (Nível) e validando se o registro pertence ao layout.
+    Orquestra a compilação dos layouts ECD de CSV para JSON.
+    Refatorado para Alta Performance (O(N)) e Modularidade.
     """
-
-    if not os.path.exists(INPUT_CAMPOS) or not os.path.exists(INPUT_REGISTROS):
-        logging.error("Arquivos de entrada não encontrados.")
-        return
+    print("\n>>> INICIANDO COMPILAÇÃO DE LAYOUTS ECD...")
 
     try:
-        # --- 1. Leitura e Preparação dos Dados ---
+        # 1. Preparação do Ambiente
+        if os.path.exists(_OUTPUT_DIR):
+            logging.info(f"Limpando diretório de saída: {_OUTPUT_DIR}")
+            shutil.rmtree(_OUTPUT_DIR, ignore_errors=True)
+        os.makedirs(_OUTPUT_DIR, exist_ok=True)
 
-        # Leitura dos Campos
-        df_campos = pd.read_csv(INPUT_CAMPOS, sep=";", encoding="utf-8-sig", dtype=str)
-        # Limpar colunas e dados
-        df_campos.columns = pd.Index([str(c).strip() for c in df_campos.columns])
-        df_campos = df_campos.apply(
-            lambda x: cast(pd.Series, x).str.strip() if x.dtype == "object" else x
+        # 2. Carga e Sanitização
+        df_campos = _load_and_clean_csv(_INPUT_CAMPOS)
+        df_registros = _load_and_clean_csv(_INPUT_REGISTROS)
+
+        # 3. Tipagem de Colunas Críticas
+        for col in ["Decimal", "Ordem", "Tamanho"]:
+            df_campos[col] = _safe_int_convert(cast(pd.Series, df_campos[col]))
+
+        df_registros["Nivel"] = _safe_int_convert(
+            cast(pd.Series, df_registros["Nivel"])
         )
 
-        # Tratamento de Tipos nos Campos
-        df_campos["Decimal"] = (
-            cast(
-                pd.Series,
-                cast(pd.Series, df_campos["Decimal"]).replace({"-": "0", "": "0"}),
-            )
-            .fillna("0")
-            .astype(int)
-        )
-        df_campos["Ordem"] = (
-            cast(
-                pd.Series,
-                pd.to_numeric(cast(pd.Series, df_campos["Ordem"]), errors="coerce"),
-            )
-            .fillna(0)
-            .astype(int)
-        )
-        df_campos["Tamanho"] = (
-            cast(
-                pd.Series,
-                pd.to_numeric(cast(pd.Series, df_campos["Tamanho"]), errors="coerce"),
-            )
-            .fillna(0)
-            .astype(int)
-        )
-
-        # Leitura dos Registros (Hierarquia)
-        df_registros = pd.read_csv(
-            INPUT_REGISTROS, sep=";", encoding="utf-8-sig", dtype=str
-        )
-        df_registros.columns = pd.Index([str(c).strip() for c in df_registros.columns])
-        df_registros = df_registros.apply(
-            lambda x: cast(pd.Series, x).str.strip() if x.dtype == "object" else x
-        )
-
-        # Converter Nivel para int
-        df_registros["Nivel"] = (
-            cast(
-                pd.Series,
-                pd.to_numeric(cast(pd.Series, df_registros["Nivel"]), errors="coerce"),
-            )
-            .fillna(0)
-            .astype(int)
-        )
-
-        # --- 2. Geração de Schemas ---
-        versoes = cast(pd.Series, df_campos["Versao"]).unique()
-        logging.info(f"Versões encontradas em Campos: {versoes}")
-
-        if not os.path.exists(OUTPUT_DIR):
-            os.makedirs(OUTPUT_DIR)
-
-        for versao in versoes:
-            if not versao or pd.isna(versao):
+        # 4. Processamento Otimizado por Versão (Vectorized GroupBy)
+        # Agrupamos por versão para evitar .loc repetitivos
+        for versao, group_versao in df_campos.groupby("Versao"):
+            # Verifica se a chave é nula ou vazia de forma segura para o linter
+            if pd.isna(versao) is True or str(versao).strip() == "":
                 continue
 
-            # Extrair número da versão para mapear com a coluna Leiaute_X do csv de registros
-            # Ex: 9.00 -> 9
-            versao_num = int(float(str(versao)))
-            coluna_leiaute = f"Leiaute_{versao_num}"
+            versao_str = str(versao)
+            logging.info(f"Processando Layout Versão: {versao_str}")
 
-            if coluna_leiaute not in df_registros.columns:
-                logging.warning(
-                    f"Versão {versao} (Coluna {coluna_leiaute}) não encontrada no arquivo de registros. Pulando validação cruzada rigorosa."
+            # Mapeamento de Layout (Cruzamento com tabela de hierarquia)
+            versao_num = int(float(versao_str))
+            col_leiaute = f"Leiaute_{versao_num}"
+
+            # Determina registros válidos e seus níveis para esta versão
+            if col_leiaute in df_registros.columns:
+                df_reg_validos = df_registros[df_registros[col_leiaute] == "S"]
+                map_niveis = dict(
+                    zip(df_reg_validos["Registro"], df_reg_validos["Nivel"])
                 )
-                # Fallback: assume que todos os registros da versão são válidos se a coluna não existir
-                # Usando .loc para garantir que o resultado da filtragem seja tratado como DataFrame
-                df_filtro_ver = df_campos.loc[df_campos["Versao"] == versao]
-                registros_validos_map: Dict[str, Any] = {
-                    str(r): 0 for r in cast(pd.Series, df_filtro_ver["REG"]).unique()
-                }
             else:
-                # Filtra apenas registros marcados com 'S' para este layout
-                df_reg_versao = df_registros.loc[df_registros[coluna_leiaute] == "S"]
-                # Mapa de Registro -> Nivel
-                registros_validos_map = dict(
-                    zip(df_reg_versao["Registro"], df_reg_versao["Nivel"])
+                logging.warning(
+                    f"  Coluna {col_leiaute} ausente. Fallback para todos os registros."
                 )
+                map_niveis = {r: 0 for r in group_versao["REG"].unique()}
 
-            # Inicia estrutura do Schema
-            schema_json = {}
+            schema_json: Dict[str, Any] = {}
 
-            # Filtra campos desta versão
-            df_ver = df_campos.loc[df_campos["Versao"] == versao]
-            registros_da_versao = cast(pd.Series, df_ver["REG"]).unique()
-
-            for reg in registros_da_versao:
-                # Cruzamento: Verifica se o registro é válido para este layout e pega o nível
-                if reg not in registros_validos_map:
-                    # Se não estiver no mapa de registros válidos, ignoramos (não deve estar no JSON)
-                    # Exceção: Talvez o CSV de campos tenha registros que o de layout diz 'N'. Respeitamos o de Layout.
+            # Agrupamos campos por Registro dentro da versão (Performance O(N))
+            for reg, group_reg in group_versao.groupby("REG"):
+                reg_str = str(reg)
+                if reg_str not in map_niveis:
                     continue
 
-                nivel = registros_validos_map[reg]
-
-                # Monta lista de campos
-                campos_df = df_ver.loc[df_ver["REG"] == reg].sort_values(by="Ordem")
-                lista_campos = []
-                for _, row in campos_df.iterrows():
-                    campo = {
+                # Monta lista de campos ordenada
+                campos_ordenados = group_reg.sort_values("Ordem")
+                lista_campos = [
+                    {
                         "nome": row["CampoUnico"],
                         "tipo": row["Tipo"],
                         "tamanho": int(row["Tamanho"]),
                         "decimal": int(row["Decimal"]),
                     }
-                    lista_campos.append(campo)
+                    for _, row in campos_ordenados.iterrows()
+                ]
 
-                # Nova Estrutura com 'nivel'
-                schema_json[str(reg)] = {"nivel": int(nivel), "campos": lista_campos}
+                schema_json[reg_str] = {
+                    "nivel": int(map_niveis[reg_str]),
+                    "campos": lista_campos,
+                }
 
-            # Salvar JSON
-            nome_arquivo = f"layout_{versao}.json"
-            caminho_arquivo = os.path.join(OUTPUT_DIR, nome_arquivo)
-
-            with open(caminho_arquivo, "w", encoding="utf-8") as f:
+            # 5. Persistência
+            output_path = os.path.join(_OUTPUT_DIR, f"layout_{versao_str}.json")
+            with open(output_path, "w", encoding="utf-8") as f:
                 json.dump(schema_json, f, indent=2, ensure_ascii=False)
 
-            logging.info(
-                f"Schema gerado: {nome_arquivo} ({len(schema_json)} registros)"
-            )
-
-        logging.info("Processo de geração concluído com sucesso.")
+        logging.info("Compilação de layouts finalizada com sucesso.")
 
     except Exception as e:
-        logging.error(f"Erro no processamento: {e}")
+        logging.error(f"FALHA NA COMPILAÇÃO: {e}")
         raise
 
 

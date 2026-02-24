@@ -6,8 +6,8 @@ description: Analisa um arquivo e propõe uma refatoração completa com foco em
 
 Siga rigorosamente estes passos ao ser acionado para refatorar um arquivo:
 
-1. **Leitura e Diagnóstico**: 
-   Descreva as 3 piores falhas de arquitetura do código atual antes de escrever qualquer nova função no arquivo.
+1. **Leitura e Diagnóstico**:
+   Descreva as 10 piores falhas de arquitetura do código atual antes de escrever qualquer nova função no arquivo.
    Foque em identificar gargalos (ex: loops O(n^2)), problemas de legibilidade (Clean Code, PEP-8) e ausência de tratamento de erros defensivo.
 
 2. **Planejamento da Melhoria**:

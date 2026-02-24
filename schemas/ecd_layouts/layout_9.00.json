@@ -387,6 +387,80 @@
       }
     ]
   },
+  "9001": {
+    "nivel": 1,
+    "campos": [
+      {
+        "nome": "9001_REG",
+        "tipo": "C",
+        "tamanho": 4,
+        "decimal": 0
+      },
+      {
+        "nome": "9001_IND_DAD",
+        "tipo": "N",
+        "tamanho": 1,
+        "decimal": 0
+      }
+    ]
+  },
+  "9900": {
+    "nivel": 2,
+    "campos": [
+      {
+        "nome": "9900_REG",
+        "tipo": "C",
+        "tamanho": 4,
+        "decimal": 0
+      },
+      {
+        "nome": "9900_REG_BLC",
+        "tipo": "C",
+        "tamanho": 4,
+        "decimal": 0
+      },
+      {
+        "nome": "9900_QTD_REG_BLC",
+        "tipo": "N",
+        "tamanho": 0,
+        "decimal": 0
+      }
+    ]
+  },
+  "9990": {
+    "nivel": 1,
+    "campos": [
+      {
+        "nome": "9990_REG",
+        "tipo": "C",
+        "tamanho": 4,
+        "decimal": 0
+      },
+      {
+        "nome": "9990_QTD_LIN_9",
+        "tipo": "N",
+        "tamanho": 0,
+        "decimal": 0
+      }
+    ]
+  },
+  "9999": {
+    "nivel": 0,
+    "campos": [
+      {
+        "nome": "9999_REG",
+        "tipo": "C",
+        "tamanho": 4,
+        "decimal": 0
+      },
+      {
+        "nome": "9999_QTD_LIN",
+        "tipo": "N",
+        "tamanho": 0,
+        "decimal": 0
+      }
+    ]
+  },
   "I001": {
     "nivel": 1,
     "campos": [
@@ -2169,80 +2243,6 @@
       },
       {
         "nome": "K990_QTD_LIN_K",
-        "tipo": "N",
-        "tamanho": 0,
-        "decimal": 0
-      }
-    ]
-  },
-  "9001": {
-    "nivel": 1,
-    "campos": [
-      {
-        "nome": "9001_REG",
-        "tipo": "C",
-        "tamanho": 4,
-        "decimal": 0
-      },
-      {
-        "nome": "9001_IND_DAD",
-        "tipo": "N",
-        "tamanho": 1,
-        "decimal": 0
-      }
-    ]
-  },
-  "9900": {
-    "nivel": 2,
-    "campos": [
-      {
-        "nome": "9900_REG",
-        "tipo": "C",
-        "tamanho": 4,
-        "decimal": 0
-      },
-      {
-        "nome": "9900_REG_BLC",
-        "tipo": "C",
-        "tamanho": 4,
-        "decimal": 0
-      },
-      {
-        "nome": "9900_QTD_REG_BLC",
-        "tipo": "N",
-        "tamanho": 0,
-        "decimal": 0
-      }
-    ]
-  },
-  "9990": {
-    "nivel": 1,
-    "campos": [
-      {
-        "nome": "9990_REG",
-        "tipo": "C",
-        "tamanho": 4,
-        "decimal": 0
-      },
-      {
-        "nome": "9990_QTD_LIN_9",
-        "tipo": "N",
-        "tamanho": 0,
-        "decimal": 0
-      }
-    ]
-  },
-  "9999": {
-    "nivel": 0,
-    "campos": [
-      {
-        "nome": "9999_REG",
-        "tipo": "C",
-        "tamanho": 4,
-        "decimal": 0
-      },
-      {
-        "nome": "9999_QTD_LIN",
         "tipo": "N",
         "tamanho": 0,
         "decimal": 0
