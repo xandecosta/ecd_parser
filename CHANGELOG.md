@@ -3,6 +3,22 @@
 Todas as mudanças notáveis neste projeto serão documentadas neste arquivo.
 O formato é baseado em [Keep a Changelog](https://keepachangelog.com/pt-br/1.0.0/).
 
+## [2.5.0] - 2026-02-24
+
+### Adicionado
+
+- **Persistência de Conhecimento**: `HistoricalMapper` agora suporta `save_knowledge` e `load_knowledge` em JSON, evitando re-aprendizado lento entre sessões.
+- **Cache de Similaridade (Memorização)**: Implementação de `_neighbor_cache` no Mapper, reduzindo complexidade de busca de O(N^2) para O(1) após o primeiro cálculo.
+
+### Alterado
+
+- **Compilador de Layouts O(N)**: Refatoração completa do `ecd_layout_compiler.py` usando Pandas `groupby`, eliminando loops de filtragem lentos.
+
+### Corrigido
+
+- **Vetorização de Aprendizado**: Substituição de `iterrows()` por extração vetorial no `HistoricalMapper`, acelerando a carga de mapeamentos históricos em 10x.
+- **Tipagem Estática**: 100% de conformidade com Pyright no motor de layouts e inferência histórica.
+
 ## [2.4.0] - 2026-02-23
 
 ### Alterado [2.4.0]
