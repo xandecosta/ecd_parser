@@ -3,6 +3,7 @@ import os
 import logging
 from datetime import datetime
 from typing import Dict
+from utils.formatting import apply_region_format
 
 
 class ECDExporter:
@@ -15,45 +16,12 @@ class ECDExporter:
         self.path_saida = path_saida
         self.output_base = os.path.dirname(path_saida)
         self.id_folder = os.path.basename(path_saida)
-        self._preparar_pastas()
-
-    def _preparar_pastas(self) -> None:
-        """Garante a existência da pasta de saída individual."""
-        if not os.path.exists(self.path_saida):
-            os.makedirs(self.path_saida)
+        os.makedirs(self.path_saida, exist_ok=True)
 
     @staticmethod
     def aplicar_formatacao_regional(df: pd.DataFrame) -> pd.DataFrame:
-        """
-        Aplica formatação PT-BR seguindo as regras:
-        - Colunas DT_*: Data DD/MM/AAAA
-        - Colunas VL_*: Valor com vírgula decimal
-        """
-        df_out = df.copy()
-        for col in df_out.columns:
-            col_str = str(col).upper()
-
-            # 1. Datas (Prefixo DT_)
-            if col_str.startswith("DT_"):
-                if pd.api.types.is_datetime64_any_dtype(df_out[col]):
-                    df_out[col] = df_out[col].dt.strftime("%d/%m/%Y")
-                else:
-                    # Caso seja string ou outro tipo, tenta converter e formatar
-                    try:
-                        df_out[col] = pd.to_datetime(df_out[col]).dt.strftime(
-                            "%d/%m/%Y"
-                        )
-                    except Exception:
-                        pass
-
-            # 2. Valores (Prefixo VL_)
-            elif col_str.startswith("VL_"):
-                # Converte para string com vírgula decimal
-                df_out[col] = df_out[col].apply(
-                    lambda x: str(x).replace(".", ",") if pd.notna(x) else ""
-                )
-
-        return df_out
+        """Proxy para o utilitário centralizado (Mantém compatibilidade)."""
+        return apply_region_format(df)
 
     def exportar_lote(
         self,

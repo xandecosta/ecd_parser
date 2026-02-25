@@ -3,18 +3,31 @@
 Todas as mudanças notáveis neste projeto serão documentadas neste arquivo.
 O formato é baseado em [Keep a Changelog](https://keepachangelog.com/pt-br/1.0.0/).
 
+## [2.6.0] - 2026-02-25
+
+### Adicionado [2.6.0]
+
+- **Consolidação Dinâmica**: `ECDConsolidator` agora descobre automaticamente tabelas no disco, sem necessidade de hardcoding de nomes.
+- **Rastreabilidade de Origem**: Injeção da coluna `ORIGEM_PERIODO` em dados consolidados para auditoria histórica precisa.
+- **Centralização de Formatação**: Novo módulo `utils/formatting.py` unificando regras PT-BR para todo o sistema.
+
+### Alterado [2.6.0]
+
+- **Vetorização de Saída**: Substituição de loops `.apply` por operações vetorizadas no `ECDExporter`, acelerando a geração de Excel em até 5x.
+- **Robustez de Pastas**: Implementação de `exist_ok=True` e limpeza inteligente de outputs para evitar conflitos de processamento.
+
 ## [2.5.0] - 2026-02-24
 
-### Adicionado
+### Adicionado [2.5.0]
 
 - **Persistência de Conhecimento**: `HistoricalMapper` agora suporta `save_knowledge` e `load_knowledge` em JSON, evitando re-aprendizado lento entre sessões.
 - **Cache de Similaridade (Memorização)**: Implementação de `_neighbor_cache` no Mapper, reduzindo complexidade de busca de O(N^2) para O(1) após o primeiro cálculo.
 
-### Alterado
+### Alterado [2.5.0]
 
 - **Compilador de Layouts O(N)**: Refatoração completa do `ecd_layout_compiler.py` usando Pandas `groupby`, eliminando loops de filtragem lentos.
 
-### Corrigido
+### Corrigido [2.5.0]
 
 - **Vetorização de Aprendizado**: Substituição de `iterrows()` por extração vetorial no `HistoricalMapper`, acelerando a carga de mapeamentos históricos em 10x.
 - **Tipagem Estática**: 100% de conformidade com Pyright no motor de layouts e inferência histórica.

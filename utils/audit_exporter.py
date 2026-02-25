@@ -2,10 +2,7 @@ import pandas as pd
 import os
 import logging
 from typing import Dict, Any, List, cast
-# from openpyxl import Workbook
-# from openpyxl.utils.dataframe import dataframe_to_rows
-# Styles for future use
-# from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+from utils.formatting import apply_region_format
 
 logger = logging.getLogger(__name__)
 
@@ -166,36 +163,8 @@ class AuditExporter:
 
     @staticmethod
     def aplicar_formatacao_regional(df: pd.DataFrame) -> pd.DataFrame:
-        """Sincroniza lógica de formatação regional (vírgulas e datas)."""
-        df_out = df.copy()
-        for col in df_out.columns:
-            col_str = str(col).upper()
-
-            # 1. Datas (Prefixo DT_ ou PERIODO)
-            if col_str.startswith("DT_") or col_str == "PERIODO":
-                if pd.api.types.is_datetime64_any_dtype(df_out[col]):
-                    df_out[col] = df_out[col].dt.strftime("%d/%m/%Y")
-                elif "datetime" in str(df_out[col].dtype).lower():
-                    try:
-                        df_out[col] = pd.to_datetime(df_out[col]).dt.strftime(
-                            "%d/%m/%Y"
-                        )
-                    except Exception:
-                        pass
-                elif col_str == "PERIODO" and hasattr(df_out[col], "dt"):
-                    # Cast para Period se necessário
-                    try:
-                        df_out[col] = df_out[col].dt.strftime("%m/%Y")
-                    except Exception:
-                        pass
-
-            # 2. Valores (Prefixo VL_ ou DIF_ ou IMPACTO)
-            elif any(x in col_str for x in ["VL_", "DIF_", "IMPACTO", "VLR_"]):
-                df_out[col] = df_out[col].apply(
-                    lambda x: str(x).replace(".", ",") if pd.notna(x) else ""
-                )
-
-        return df_out
+        """Proxy para o utilitário centralizado (Mantém compatibilidade e DRY)."""
+        return apply_region_format(df)
 
     def _sanitizar_nome_aba(self, nome: str) -> str:
         """Limpa o nome da aba para os limites do Excel (31 chars e sem especiais)."""
