@@ -40,7 +40,7 @@ Siga estes dois passos simples:
 1. **Preparar Planos do Governo**: Rode o veloz gestor de tabelas para que o robô escaneie eficientemente a pasta de metadados brutos via C-engine e construa todos os catálogos base:
 
     ```bash
-    python utils/ref_plan_manager.py
+    python intelligence/ref_plan_manager.py
     ```
 
 2. **Processar seus Arquivos**: Coloque seus arquivos `.txt` (ECD) na pasta `data/input` e rode o motor principal:

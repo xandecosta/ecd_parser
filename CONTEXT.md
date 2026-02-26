@@ -34,16 +34,22 @@ Aqui fica a inteligência bruta que transforma texto em contabilidade.
 - **`processor.py`**: O "Contador Master". É aqui que as tabelas são ligadas, as contas são somadas de baixo para cima (Bottom-Up) e os balancetes são construídos.
 - **`auditor.py`**: O "Auditor Eletrônico". Contém a lógica matemática dos 11 testes forenses (consulte os detalhes em [Metodologia de Auditoria](./docs/architecture/audit_methodology.md)).
 
-### 📂 Pasta `/utils/` (As Ferramentas de Suporte)
+### 📂 Pasta `/exporters/` (Os Entregadores)
 
-Arquivos que ajudam na organização e finalização dos dados.
+Arquivos que cuidam da saída, formatação e consolidação dos dados.
 
 - **`exporter.py`**: O "Formatador Vetorizado". Garante que o Excel saia com vírgulas e datas no padrão brasileiro usando performance de série.
 - **`audit_exporter.py`**: Especialista em relatórios de auditoria, gerando abas de Scorecard e evidências com formatação unificada.
 - **`consolidator.py`**: O "Agregador Dinâmico". Localiza automaticamente tabelas no disco e as une com rastreio de origem.
 - **`formatting.py`**: O "Coração Regional". Centraliza as regras de tradução de dados técnicos para o padrão contábil brasileiro.
-- **`ref_plan_manager.py`**: O "Bibliotecário Automático". Escaneia ultrarrapidamente diretórios brutos da RFB e constrói amarrações do plano sem metadados estáticos via motor vetorial O(1), aplicando robusta auditoria de evolução de contas.
-- **`historical_mapper.py`**: O "Cérebro da Ponte". Aprende com anos passados para preencher falhas em arquivos antigos.
+
+### 📂 Pasta `/intelligence/` (O Cérebro do Negócio)
+
+Aqui mora o conhecimento acumulado sobre as regras do SPED e da Receita Federal.
+
+- **`historical_mapper.py`**: O "Cérebro da Ponte". Aprende com anos passados para preencher falhas em arquivos antigos (Ponte Virtual).
+- **`ref_plan_manager.py`**: O "Bibliotecário Automático". Escaneia diretórios da RFB e constrói amarrações do plano sem metadados estáticos via motor vetorial O(1).
+- **`ecd_layout_compiler.py`**: O "Compilador de Metadados". Transforma as regras da RFB em schemas JSON de alta performance.
 
 ### 📂 Pasta `/docs/` (A Enciclopédia Técnica)
 
@@ -52,9 +58,9 @@ Manuais detalhados sobre as metodologias aplicadas.
 - **`architecture/audit_methodology.md`**: Explica o "porquê" e o "como" de cada teste de auditoria.
 - **`architecture/bridging_logic.md`**: Detalha a matemática por trás da recuperação de dados históricos.
 
-### 📂 Pasta `/scripts/` (Playground de Desenvolvimento)
+### 📂 Pasta `/tools/` (Playground de Desenvolvimento)
 
-Lugar para testes rápidos e ferramentas auxiliares.
+Lugar para ferramentas auxiliares. Substitui a antiga `/scripts/`.
 
 - **`dev_audit.py`**: Script prático para testar a auditoria em apenas um arquivo ECD sem precisar rodar o processo inteiro.
 

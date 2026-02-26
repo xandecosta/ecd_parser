@@ -2,7 +2,7 @@ import pandas as pd
 import os
 import logging
 from typing import Dict, Any, List, cast
-from utils.formatting import apply_region_format
+from exporters.formatting import apply_region_format
 
 logger = logging.getLogger(__name__)
 

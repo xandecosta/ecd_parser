@@ -10,7 +10,7 @@ if project_root not in sys.path:
 from core.reader_ecd import ECDReader  # noqa: E402
 from core.processor import ECDProcessor  # noqa: E402
 from core.auditor import ECDAuditor  # noqa: E402
-from utils.audit_exporter import AuditExporter  # noqa: E402
+from exporters.audit_exporter import AuditExporter  # noqa: E402
 
 
 def test_single_file_audit():

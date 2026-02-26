@@ -3,6 +3,14 @@
 Todas as mudanças notáveis neste projeto serão documentadas neste arquivo.
 O formato é baseado em [Keep a Changelog](https://keepachangelog.com/pt-br/1.0.0/).
 
+## [2.6.1] - 2026-02-25
+
+### Alterado [2.6.1]
+
+- **Reorganização Estrutural (Remanejamento Ouro)**: Extinção das pastas genéricas `utils/` e `scripts/`.
+- **Categorização por Função**: Distribuição de arquivos em pastas didáticas: `exporters/` (I/O), `intelligence/` (Domínio) e `tools/` (Desenvolvedor).
+- **Atomicidade de Imports**: Sincronização de todos os módulos (`core`, `main`, `tests`) para a nova arquitetura física.
+
 ## [2.6.0] - 2026-02-25
 
 ### Adicionado [2.6.0]

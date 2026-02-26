@@ -2,7 +2,7 @@ import pytest
 import os
 import pandas as pd
 from decimal import Decimal
-from utils.exporter import ECDExporter
+from exporters.exporter import ECDExporter
 
 
 @pytest.fixture

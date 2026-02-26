@@ -1,6 +1,6 @@
 import pandas as pd
 import os
-from utils.historical_mapper import HistoricalMapper
+from intelligence.historical_mapper import HistoricalMapper
 
 
 def test_historical_mapper_bidirectional_learning():

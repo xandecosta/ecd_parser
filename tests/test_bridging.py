@@ -10,7 +10,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from core.reader_ecd import ECDReader
 from core.processor import ECDProcessor
-from utils.historical_mapper import HistoricalMapper
+from intelligence.historical_mapper import HistoricalMapper
 
 # SILENCIAMENTO DE LOGS PARA FOCO NO RESULTADO
 logging.getLogger().setLevel(logging.CRITICAL)

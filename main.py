@@ -7,11 +7,11 @@ from typing import Optional, cast, Any
 import pandas as pd
 from core.reader_ecd import ECDReader
 from core.processor import ECDProcessor
-from utils.exporter import ECDExporter
-from utils.consolidator import ECDConsolidator
-from utils.historical_mapper import HistoricalMapper
+from exporters.exporter import ECDExporter
+from exporters.consolidator import ECDConsolidator
+from intelligence.historical_mapper import HistoricalMapper
 from core.auditor import ECDAuditor
-from utils.audit_exporter import AuditExporter
+from exporters.audit_exporter import AuditExporter
 
 
 import sys

@@ -2,7 +2,7 @@ import os
 import pandas as pd
 import logging
 from typing import List, Set
-from utils.exporter import ECDExporter
+from exporters.exporter import ECDExporter
 
 
 class ECDConsolidator:

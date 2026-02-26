@@ -13,7 +13,7 @@ import pandas as pd  # noqa: E402
 from core.auditor import ECDAuditor  # noqa: E402
 from core.processor import ECDProcessor  # noqa: E402
 from core.reader_ecd import ECDReader  # noqa: E402
-from utils.audit_exporter import AuditExporter  # noqa: E402
+from exporters.audit_exporter import AuditExporter  # noqa: E402
 
 if sys.platform == "win32":
     if hasattr(sys.stdout, "reconfigure"):
