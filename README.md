@@ -16,11 +16,13 @@ Arquivos ECD são documentos complexos que as empresas enviam ao governo (Receit
 
 ---
 
-## 🚀 Como Começar (Início Rápido)
-
 ### 1. Preparar o Ambiente
 
-Se você está no Windows, abra o terminal na pasta do projeto e use:
+**Opção A: Rápida (Recomendado para Windows)**
+Apenas dê dois cliques no arquivo **`setup_inicial.bat`** na raiz do projeto. Ele criará o ambiente virtual e instalará todas as dependências automaticamente.
+
+**Opção B: Manual (Terminal)**
+Se preferir o terminal, abra a pasta do projeto e use:
 
 ```bash
 # 1. Criar o ambiente virtual (isolamento do projeto)
