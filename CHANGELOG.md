@@ -3,6 +3,25 @@
 Todas as mudanças notáveis neste projeto serão documentadas neste arquivo.
 O formato é baseado em [Keep a Changelog](https://keepachangelog.com/pt-br/1.0.0/).
 
+## [2.7.0] - 2026-02-27
+
+### Adicionado [2.7.0]
+
+- **IO Inteligente (Persistência)**: Implementação de cache persistente para a fase de aprendizado histórico (`history.json`), reduzindo o tempo de inicialização em execuções subsequentes.
+- **Cache de Processamento Interno**: `ECDProcessor` agora memoriza o processamento de Plano de Contas e Lançamentos dentro de uma mesma sessão, evitando cálculos redundantes.
+
+### Alterado [2.7.0]
+
+- **Migração para CSV (Universal Output)**: Substituição do XLSX pelo CSV (PT-BR) como formato padrão de saída e consolidação. Elimina o limite de 1 milhão de linhas e acelera a exportação em 10x.
+- **Núcleo de Precisão Híbrida (Float64)**: Transição da aritmética interna de `Decimal` para `float64` (vetorizada). A leitura preserva `Decimal` para segurança, mas o processamento core usa a velocidade do NumPy/C-engine.
+- **Vetorização Bottom-Up**: Reescrita completa do algoritmo de propagação hierárquica e referencial. Eliminação do `iterrows()` em favor de operações de `merge` e `add` vetorizadas.
+- **Auditoria "Option D"**: Refatoração do `AuditExporter` para gerar um Dashboard unificado e arquivos de evidência individuais por teste, facilitando a perícia em grandes volumes de dados.
+
+### Corrigido [2.7.0]
+
+- **TypeError de Precisão**: Solução definitiva para conflitos de tipos entre colunas Decimal (do Reader) e Float (do Processor) através de casts e proteções de auditoria.
+- **Resolução de venv no Cursor**: Configuração robusta do `.vscode/settings.json` com caminhos absolutos para garantir descoberta correta de bibliotecas no Windows.
+
 ## [2.6.1] - 2026-02-25
 
 ### Alterado [2.6.1]

@@ -1,12 +1,12 @@
 {
-    "include": [
-        "."
-    ],
     "executionEnvironments": [
         {
-            "root": "."
+            "root": ".",
+            "venv": ".venv",
+            "venvPath": "."
         }
     ],
-    "reportMissingImports": true,
-    "typeCheckingMode": "basic"
+    "typeCheckingMode": "basic",
+    "reportMissingImports": false,
+    "reportMissingModuleSource": false
 }

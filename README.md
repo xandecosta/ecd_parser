@@ -4,15 +4,15 @@
 
 Este programa é um "tradutor" inteligente de arquivos do **SPED Contábil (ECD)**.
 
-Arquivos ECD são documentos complexos que as empresas enviam ao governo (Receita Federal) contendo toda a sua contabilidade. Nosso software lê esses arquivos (em formato `.txt`), entende a lógica contábil por trás deles e gera relatórios organizados em **Excel** e **Parquet**, prontos para auditoria e análise financeira.
+Arquivos ECD são documentos complexos que as empresas enviam ao governo (Receita Federal) contendo toda a sua contabilidade. Nosso software lê esses arquivos (em formato `.txt`), entende a lógica contábil por trás deles e gera relatórios profissionais em **CSV (Padrão PT-BR)** e **Parquet**, prontos para auditoria de larga escala e análise em PowerBI.
 
 ### ✨ O que ele faz de especial?
 
-1. **Auditoria Forense Automática**: Procura erros, fraudes e inconsistências nos lançamentos.
-2. **Ponte Virtual**: Recupera informações de anos vizinhos para completar dados que faltam em arquivos antigos (como o ano de 2014).
-3. **Visão da Receita Federal**: Transforma a contabilidade da empresa no formato que o governo exige (Plano Referencial).
-4. **Consolidação Inteligente**: Junta vários anos em um único resumo para você ver a "saúde" da empresa ao longo do tempo.
-5. **Máxima Performance (O(1))**: Núcleo vetorial refatorado para processar milhares de contas via C-engine sem asfixiar a sua memória RAM.
+1. **Auditoria Forense Industrial**: 11 testes automatizados (Option D) que geram dashboards unificados e evidências individuais em CSV.
+2. **Performance Industrial (Vectorized)**: Núcleo reescrito em `float64` com tecnologia Pandas/NumPy, processando anos de dados em segundos.
+3. **Sem Limite de Linhas**: A migração para CSV permite ultrapassar o limite de 1 milhão de linhas do Excel na consolidação histórica.
+4. **Ponte Virtual Inteligente**: Recupera informações de anos vizinhos e persiste o conhecimento em disco (`history.json`) via IO Inteligente.
+5. **Visão da Receita Federal**: Transforma a contabilidade no formato Referencial exato exigido pelo fisco.
 
 ---
 

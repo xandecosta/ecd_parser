@@ -1,7 +1,8 @@
 import pandas as pd
 import logging
 from typing import Dict, Any, List, Optional, cast
-from decimal import Decimal
+from core.telemetry import monitor_task, TelemetryCollector
+# Auditoria Forense Digital
 
 
 logger = logging.getLogger(__name__)
@@ -36,11 +37,14 @@ class ECDAuditor:
         self.df_plano = df_plano
         self.df_naturezas = df_naturezas
         self.df_mapeamento = df_mapeamento
+        self.telemetry: Optional[TelemetryCollector] = None
+        self.current_ecd_id = ""
 
         # Armazena os resultados de todos os testes
         # Estrutura: { "Nome do Teste": { "status": "APROVADO/ALERTA/ERRO", "impacto": Decimal, "detalhes": DataFrame } }
         self.resultados: Dict[str, Any] = {}
 
+    @monitor_task("ECDAuditor", "executar_auditoria_completa")
     def executar_auditoria_completa(self) -> Dict[str, Any]:
         """Executa todas as baterias de testes sequencialmente."""
         logger.info("Iniciando bateria de Auditoria Forense...")
@@ -61,6 +65,7 @@ class ECDAuditor:
         self._teste_cruzamento_diario_balancete()
         self._teste_validacao_hierarquia()
 
+    @monitor_task("ECDAuditor", "1.1_Cruzamento_Diario")
     def _teste_cruzamento_diario_balancete(self):
         """
         1.1. Cruzamento Diário vs. Balancete
@@ -69,7 +74,7 @@ class ECDAuditor:
         if self.df_diario.empty or self.df_balancete.empty:
             self.resultados["1.1_Cruzamento_Diario_Balancete"] = {
                 "status": "SKIPPED",
-                "impacto": Decimal("0.00"),
+                "impacto": 0.0,
                 "msg": "DataFrames de Diário ou Balancete vazios.",
             }
             return
@@ -118,7 +123,7 @@ class ECDAuditor:
             on=["COD_CTA", "PERIODO"],
             how="outer",
             suffixes=("_DIARIO", "_RAZAO"),
-        ).fillna(Decimal("0.00"))
+        ).fillna(0.0)
 
         # Cálculo das Divergências
         df_conf["DIF_DEB"] = df_conf.apply(lambda x: x["VL_D"] - x["VL_DEB"], axis=1)
@@ -135,9 +140,7 @@ class ECDAuditor:
 
         # Filtro de Erros (Diferença != 0)
         # Tolerância mínima para floating point issues (embora estejamos usando Decimal)
-        mask_erro = (df_conf["DIF_DEB"] != Decimal("0.00")) | (
-            df_conf["DIF_CRED"] != Decimal("0.00")
-        )
+        mask_erro = (abs(df_conf["DIF_DEB"]) > 0.01) | (abs(df_conf["DIF_CRED"]) > 0.01)
         erros = df_conf[mask_erro].copy()
 
         impacto_total = sum(abs(x) for x in erros["DIF_DEB"]) + sum(
@@ -147,7 +150,7 @@ class ECDAuditor:
         if erros.empty:
             self.resultados["1.1_Cruzamento_Diario_Balancete"] = {
                 "status": "APROVADO",
-                "impacto": Decimal("0.00"),
+                "impacto": 0.0,
                 "erros": pd.DataFrame(),
             }
         else:
@@ -179,7 +182,7 @@ class ECDAuditor:
         if self.df_balancete.empty or self.df_plano.empty:
             self.resultados["1.2_Validacao_Hierarquia"] = {
                 "status": "SKIPPED",
-                "impacto": Decimal("0.00"),
+                "impacto": 0.0,
             }
             return
 
@@ -264,7 +267,7 @@ class ECDAuditor:
 
                 if cast(pd.DataFrame, filhos).empty:
                     # Sintética sem filhos com saldo? Pode acontecer. Se saldo != 0, alerta.
-                    if saldo_informado != Decimal("0.00"):
+                    if saldo_informado != 0:
                         divergencias.append(
                             {
                                 "COD_CTA": conta_pai,
@@ -280,8 +283,8 @@ class ECDAuditor:
 
                 if saldo_informado != saldo_calculado:
                     diff = saldo_informado - saldo_calculado
-                    # Tolerância zero para Decimal
-                    if diff != Decimal("0.00"):
+                    # Tolerância para float64
+                    if abs(diff) > 0.01:
                         divergencias.append(
                             {
                                 "COD_CTA": conta_pai,
@@ -299,7 +302,7 @@ class ECDAuditor:
         if df_div.empty:
             self.resultados["1.2_Validacao_Hierarquia"] = {
                 "status": "APROVADO",
-                "impacto": Decimal("0.00"),
+                "impacto": 0.0,
                 "erros": pd.DataFrame(),
             }
         else:
@@ -334,6 +337,7 @@ class ECDAuditor:
         self._teste_consistencia_natureza()
         self._teste_contas_orfas()
 
+    @monitor_task("ECDAuditor", "3.1_Consist_Natureza")
     def _teste_consistencia_natureza(self):
         """
         3.1. Consistência de Natureza
@@ -342,7 +346,7 @@ class ECDAuditor:
         if self.df_plano.empty:
             self.resultados["3.1_Consistencia_Natureza"] = {
                 "status": "SKIPPED",
-                "impacto": Decimal("0.00"),
+                "impacto": 0.0,
             }
             return
 
@@ -352,9 +356,10 @@ class ECDAuditor:
         # Se COD_CTA_REF não estiver no plano, tentamos merge com mapeamento.
         if "COD_CTA_REF" not in df_check.columns:
             if self.df_mapeamento is not None:
-                # Merge com I051
+                # Blindagem p/ IDE: garante que self.df_mapeamento é DataFrame
+                tab_i051 = cast(pd.DataFrame, self.df_mapeamento).copy()
                 # Normalização pode ser necessária se I051 tiver prefixos
-                df_map_temp = self.df_mapeamento.copy()
+                df_map_temp = tab_i051.copy()
                 if "I051_COD_CTA_REF" in df_map_temp.columns:
                     df_map_temp.rename(
                         columns={
@@ -386,7 +391,7 @@ class ECDAuditor:
         if df_check.empty:
             self.resultados["3.1_Consistencia_Natureza"] = {
                 "status": "APROVADO",
-                "impacto": Decimal("0.00"),
+                "impacto": 0.0,
                 "msg": "Nenhuma conta associada ao plano referencial.",
             }
             return
@@ -442,13 +447,13 @@ class ECDAuditor:
         if df_erros.empty:
             self.resultados["3.1_Consistencia_Natureza"] = {
                 "status": "APROVADO",
-                "impacto": Decimal("0.00"),
+                "impacto": 0.0,
                 "erros": pd.DataFrame(),
             }
         else:
             self.resultados["3.1_Consistencia_Natureza"] = {
                 "status": "ALERTA",  # É um alerta qualitativo, impacto financeiro difícil de medir diretamente sem saldos
-                "impacto": Decimal("0.00"),
+                "impacto": 0.0,
                 "msg": f"{len(df_erros)} contas com natureza divergente.",
                 "erros": df_erros,
             }
@@ -461,7 +466,7 @@ class ECDAuditor:
         if self.df_balancete.empty or self.df_plano.empty:
             self.resultados["3.2_Contas_Orfas"] = {
                 "status": "SKIPPED",
-                "impacto": Decimal("0"),
+                "impacto": 0.0,
             }
             return
 
@@ -494,9 +499,9 @@ class ECDAuditor:
 
         # Critério: É Analítica E (Tem Saldo Inicial != 0 OU Tem Debito != 0 OU Tem Credito != 0)
         mask_relevante = (df_b["IND_CTA"].str.upper() == "A") & (
-            (df_b["VL_SLD_INI_SIG"] != Decimal("0.00"))
-            | (df_b["VL_DEB"] != Decimal("0.00"))
-            | (df_b["VL_CRED"] != Decimal("0.00"))
+            (cast(pd.Series, df_b["VL_SLD_INI_SIG"]) != 0)
+            | (cast(pd.Series, df_b["VL_DEB"]) != 0)
+            | (cast(pd.Series, df_b["VL_CRED"]) != 0)
         )
 
         # Critério Órfã: COD_CTA_REF nulo ou vazio
@@ -513,9 +518,11 @@ class ECDAuditor:
             df_orfas.groupby("COD_CTA")
             .agg(
                 {
-                    "VL_SLD_FIN_SIG": lambda x: max(x, key=abs)
-                    if not x.empty
-                    else Decimal("0"),  # Maior saldo absoluto
+                    "VL_SLD_FIN_SIG": lambda x: (
+                        max(cast(pd.Series, x), key=abs)
+                        if not cast(pd.Series, x).empty
+                        else 0.0
+                    ),
                 }
             )
             .reset_index()
@@ -524,7 +531,7 @@ class ECDAuditor:
         if resumo_orfas.empty:
             self.resultados["3.2_Contas_Orfas"] = {
                 "status": "APROVADO",
-                "impacto": Decimal("0.00"),
+                "impacto": 0.0,
                 "erros": pd.DataFrame(),
             }
         else:
@@ -564,7 +571,7 @@ class ECDAuditor:
         if self.df_diario.empty:
             self.resultados["4.1_Lei_Benford"] = {
                 "status": "SKIPPED",
-                "impacto": Decimal("0"),
+                "impacto": 0.0,
             }
             return
 
@@ -652,15 +659,17 @@ class ECDAuditor:
         # --- DIAGNÓSTICO DE SEGUNDA CAMADA (Drill-Down Multi-Dígito) ---
         # Identifica TODOS os dígitos com anomalia positiva relevante (> 1%)
         df_benford["DESVIO_ABS"] = df_benford["FREQ_OBS"] - df_benford["FREQ_BENFORD"]
-        digitos_suspeitos = df_benford[df_benford["DESVIO_ABS"] > 0.01][
-            "DIGITO"
-        ].tolist()
+
+        # Coleta os dígitos suspeitos
+        suspeitos_list = df_benford[df_benford["DESVIO_ABS"] > 0.01]["DIGITO"].tolist()
 
         # Se não houver nenhum acima de 1%, pega o maior apenas
-        if not digitos_suspeitos:
-            digitos_suspeitos = [
-                df_benford.loc[df_benford["DESVIO_ABS"].idxmax(), "DIGITO"]
-            ]
+        if not suspeitos_list:
+            idx_max = df_benford["DESVIO_ABS"].idxmax()
+            suspeitos_list = [df_benford.loc[idx_max, "DIGITO"]]
+
+        # Casting explícito para garantir iterabilidade no loop (Linha 680)
+        digitos_suspeitos = cast(List[Any], suspeitos_list)
 
         df_lctos = self.df_diario.copy()
 
@@ -725,7 +734,7 @@ class ECDAuditor:
         # Monta resultado final com múltiplas abas
         self.resultados["4.1_Lei_Benford"] = {
             "status": status,
-            "impacto": Decimal(str(mad)),
+            "impacto": float(mad),
             "msg": f"MAD: {mad:.5f} | Dígitos com Excesso: {digitos_suspeitos}",
             "detalhes": {
                 "4.1_Benford_Frequencias": df_benford.drop(columns=["DESVIO_ABS"]),
@@ -733,6 +742,7 @@ class ECDAuditor:
             },
         }
 
+    @monitor_task("ECDAuditor", "4.2_Duplicidades")
     def _teste_duplicidades(self):
         """
         4.2. Detecção de Lançamentos Duplicados
@@ -795,13 +805,13 @@ class ECDAuditor:
         impacto = (
             cast(pd.Series, df_final_erros["VL_SINAL"]).apply(abs).sum()
             if not cast(pd.DataFrame, df_final_erros).empty
-            else Decimal("0")
+            else 0.0
         )
 
         if cast(pd.DataFrame, df_final_erros).empty:
             self.resultados["4.2_Duplicidades"] = {
                 "status": "APROVADO",
-                "impacto": Decimal("0"),
+                "impacto": 0.0,
                 "erros": pd.DataFrame(),
             }
         else:
@@ -833,7 +843,7 @@ class ECDAuditor:
         if self.df_balancete.empty:
             return
 
-        # Identificar contas de Resultado (Natureza 04 no plano ou prefixo 3 no referencial)
+        # Identificar contas de Resultado (Geralmente Natureza 04 no plano ou prefixo 3 no referencial)
         # Vamos usar a info de NATUREZA se disponível
         df_b = self.df_balancete.copy()
 
@@ -853,12 +863,12 @@ class ECDAuditor:
             }
             return
 
-        # Filtra Resultado: COD_NAT '04' (versao antiga) ou Grupos de resultado do novo plano
-        # Simplificação: Contas com natureza '04' (Resultado) ou conforme tabela da versão
+        # Filtra Resultado: COD_NAT '04' (versao antiga) ou conforme tabela da versão
+        # Simplificação: Contas com natureza '04'
 
-        mask_resultado = df_b["COD_NAT"] == "04"
-        if not mask_resultado.any():
-            # Tenta por range de contas se natureza falhar (muito heuristico, melhor pular)
+        # Garante que é uma Series booleana para satisfazer o IDE
+        has_res = cast(pd.Series, (df_b["COD_NAT"] == "04")).any()
+        if not has_res:
             self.resultados["4.3_Omissao_Encerramento"] = {
                 "status": "SKIPPED",
                 "msg": "Nenhuma conta de resultado (04) identificada.",
@@ -903,7 +913,7 @@ class ECDAuditor:
             cast(pd.DataFrame, df_e_total),
             on="COD_CTA",
             how="left",
-        ).fillna(Decimal("0.00"))
+        ).fillna(0.0)
 
         # 3. Cálculo da Sobra: Saldo Pré-Encerramento + Lançamentos de Zeramento
         df_confronto["SALDO_RESTANTE"] = df_confronto.apply(
@@ -920,13 +930,15 @@ class ECDAuditor:
             )
 
         # Filtra onde a sobra != 0
-        erros = df_confronto[df_confronto["SALDO_RESTANTE"] != Decimal("0.00")].copy()
+        erros = df_confronto[
+            abs(cast(pd.Series, df_confronto["SALDO_RESTANTE"])) > 0.01
+        ].copy()
         soma_erros = sum(abs(x) for x in erros["SALDO_RESTANTE"])
 
         if erros.empty:
             self.resultados["4.3_Omissao_Encerramento"] = {
                 "status": "APROVADO",
-                "impacto": Decimal("0.00"),
+                "impacto": 0.0,
                 "erros": pd.DataFrame(),
             }
         else:
@@ -959,6 +971,7 @@ class ECDAuditor:
         self._teste_inversao_natureza()
         self._teste_consistencia_pl_resultado()
 
+    @monitor_task("ECDAuditor", "5.2_Estouro_Caixa")
     def _teste_estouro_caixa(self):
         """
         5.2. Estouro de Caixa
@@ -1047,7 +1060,7 @@ class ECDAuditor:
         if cast(pd.DataFrame, erros).empty:
             self.resultados["5.2_Estouro_Caixa"] = {
                 "status": "APROVADO",
-                "impacto": Decimal("0"),
+                "impacto": 0.0,
             }
         else:
             # Agrupar impacto (maior estouro)
@@ -1104,7 +1117,7 @@ class ECDAuditor:
         if df_b_filtered.empty:
             self.resultados["5.3_Passivo_Ficticio"] = {
                 "status": "APROVADO",
-                "impacto": Decimal("0"),
+                "impacto": 0.0,
             }
             return
 
@@ -1144,7 +1157,7 @@ class ECDAuditor:
         if cast(pd.DataFrame, estaticas).empty:
             self.resultados["5.3_Passivo_Ficticio"] = {
                 "status": "APROVADO",
-                "impacto": Decimal("0"),
+                "impacto": 0.0,
             }
         else:
             impacto = sum(abs(x) for x in cast(pd.Series, estaticas["VL_SLD_FIN_SIG"]))
@@ -1245,7 +1258,7 @@ class ECDAuditor:
         if cast(pd.DataFrame, erros_df).empty:
             self.resultados["5.1_Inversao_Natureza"] = {
                 "status": "APROVADO",
-                "impacto": Decimal("0"),
+                "impacto": 0.0,
             }
         else:
             # --- AJUSTE FORENSE: Evitar inflar impacto com saldo mensal ---
@@ -1274,7 +1287,7 @@ class ECDAuditor:
         ):
             self.resultados["5.4_Consistencia_PL_Resultado"] = {
                 "status": "SKIPPED",
-                "impacto": Decimal("0"),
+                "impacto": 0.0,
             }
             return
 
@@ -1350,7 +1363,7 @@ class ECDAuditor:
         if divergencia < 100:  # Tolerância para arredondamentos ou pequenos ajustes
             self.resultados["5.4_Consistencia_PL_Resultado"] = {
                 "status": "APROVADO",
-                "impacto": Decimal("0"),
+                "impacto": 0.0,
                 "msg": "Amarração PL vs Resultado consistente.",
                 "detalhes": df_resumo,
             }

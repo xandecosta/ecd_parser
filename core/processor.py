@@ -2,9 +2,10 @@ import os
 import json
 import pandas as pd
 import logging
+import numpy as np
 
 from typing import Dict, List, Any, Optional, cast
-from decimal import Decimal
+from core.telemetry import monitor_task, TelemetryCollector
 
 # Logger local para uso interno do módulo (não configura nível globalmente)
 logger = logging.getLogger(__name__)
@@ -29,6 +30,12 @@ class ECDProcessor:
         self.blocos: Dict[str, pd.DataFrame] = {}
         self.cod_plan_ref: Optional[str] = None
         self.ano_vigencia: Optional[int] = None
+        self.telemetry: Optional[TelemetryCollector] = None
+        self.current_ecd_id = ""
+
+        # --- Cache interno (evita reprocessamento dentro do mesmo ECD) ---
+        self._cache_plano: Optional[pd.DataFrame] = None
+        self._cache_lancamentos: Optional[pd.DataFrame] = None
 
         # Path para o catálogo de planos referenciais
         self.catalog_path = os.path.normpath(
@@ -140,6 +147,7 @@ class ECDProcessor:
                 :, ~pd.Index(df_reg.columns).duplicated()
             ].copy()
 
+    @monitor_task("ECDProcessor", "_identificar_metadados_referenciais")
     def _identificar_metadados_referenciais(self) -> None:
         """Determina o Ano e o Código da Instituição (Funil de Metadados)."""
         df_0000 = self.blocos.get("dfECD_0000")
@@ -147,15 +155,18 @@ class ECDProcessor:
             return
 
         # 1. Identificação do Ano (DT_FIN) - Comum a todas as versões
-        val_0000 = df_0000.iloc[0]
+        val_0000 = cast(pd.Series, df_0000.iloc[0])
         dt_fin = val_0000.get("DT_FIN")
         if hasattr(dt_fin, "year") and dt_fin is not None:
             self.ano_vigencia = int(getattr(dt_fin, "year"))
         elif isinstance(dt_fin, str) and len(dt_fin) >= 8:
             # Tenta DDMMYYYY ou YYYYMMDD
+            s_dt_fin = cast(str, dt_fin)
             try:
                 self.ano_vigencia = (
-                    int(dt_fin[:4]) if int(dt_fin[:4]) > 1900 else int(dt_fin[-4:])
+                    int(s_dt_fin[:4])
+                    if int(s_dt_fin[:4]) > 1900
+                    else int(s_dt_fin[-4:])
                 )
             except (ValueError, IndexError):
                 pass
@@ -168,7 +179,8 @@ class ECDProcessor:
 
         if versao_num >= 8.0:
             # Moderno: Está no 0000
-            self.cod_plan_ref = str(df_0000.iloc[0].get("COD_PLAN_REF", ""))
+            val_0000_2 = cast(pd.Series, df_0000.iloc[0])
+            self.cod_plan_ref = str(val_0000_2.get("COD_PLAN_REF", ""))
         else:
             # Legado: Está no primeiro I051
             df_i051 = self.blocos.get("dfECD_I051")
@@ -178,7 +190,9 @@ class ECDProcessor:
         if not self.cod_plan_ref:
             # --- NÍVEL 1.5: Inferência de Instituição ---
             if self.knowledge_base is not None:
-                inferred = self.knowledge_base.get_inferred_plan(
+                # Cast Any para o KB para garantir que o método seja localizado
+                kb = cast(Any, self.knowledge_base)
+                inferred = kb.get_inferred_plan(
                     self.cnpj, ano_alvo=str(self.ano_vigencia)
                 )
                 if inferred:
@@ -193,17 +207,34 @@ class ECDProcessor:
                 "O mapeamento RFB pode falhar."
             )
 
-    def _converter_decimal(self, valor: Any) -> Decimal:
-        """Garante precisão absoluta para cálculos financeiros."""
-        if pd.isna(valor) or str(valor).strip() == "" or valor is None:
-            return Decimal("0.00")
+    @staticmethod
+    def _to_float(valor: Any) -> float:
+        """
+        Converte um valor para float64 de forma segura.
+        Substitui _converter_decimal para operações vetoriais internas.
+        Precision: float64 tem 15-17 dígitos significativos — suficiente
+        para qualquer valor contábil real (até ~R$ 100 trilhões com centavos).
+        """
+        if valor is None:
+            return 0.0
         try:
-            return Decimal(str(valor))
-        except Exception:
-            return Decimal("0.00")
+            f = float(str(valor).replace(",", ".").strip())
+            return 0.0 if np.isnan(f) else f
+        except (ValueError, TypeError):
+            return 0.0
 
+    @staticmethod
+    def _series_to_float(s: pd.Series) -> pd.Series:
+        """Converte uma Series inteira para float64 vetorialmente (sem .apply)."""
+        return cast(pd.Series, pd.to_numeric(s, errors="coerce")).fillna(0.0)
+
+    @monitor_task("ECDProcessor", "processar_plano_contas")
     def processar_plano_contas(self) -> pd.DataFrame:
         """Processa o Plano de Contas da Empresa (I050) integrado com o Referencial (I051)."""
+        # --- Cache: retorna imediatamente se já processado neste ECD ---
+        if self._cache_plano is not None:
+            return self._cache_plano
+
         df_i050 = self.blocos.get("dfECD_I050")
         df_i051 = self.blocos.get("dfECD_I051")
 
@@ -295,10 +326,17 @@ class ECDProcessor:
                 + " - "
                 + cast(pd.Series, df_res["CTA"]).astype(str).str.strip().str.upper()
             )
-        return cast(pd.DataFrame, df_res)
+        # --- Cache: salva resultado para reuso dentro do mesmo ECD ---
+        self._cache_plano = cast(pd.DataFrame, df_res)
+        return self._cache_plano
 
+    @monitor_task("ECDProcessor", "processar_lancamentos")
     def processar_lancamentos(self, df_plano: pd.DataFrame) -> pd.DataFrame:
         """Processa Lançamentos Contábeis (I200/I250)."""
+        # --- Cache: retorna imediatamente se já processado neste ECD ---
+        if self._cache_lancamentos is not None:
+            return self._cache_lancamentos
+
         df_i200 = self.blocos.get("dfECD_I200")
         df_i250 = self.blocos.get("dfECD_I250")
         if df_i200 is None or df_i250 is None:
@@ -312,31 +350,25 @@ class ECDProcessor:
         )
 
         df_lctos["CNPJ"] = self.cnpj
-        df_lctos["VL_D"] = df_lctos.apply(
-            lambda r: self._converter_decimal(r.get("VL_DC"))
-            if r.get("IND_DC") == "D"
-            else Decimal("0.00"),
-            axis=1,
-        )
-        df_lctos["VL_C"] = df_lctos.apply(
-            lambda r: self._converter_decimal(r.get("VL_DC"))
-            if r.get("IND_DC") == "C"
-            else Decimal("0.00"),
-            axis=1,
-        )
-        df_lctos["VL_SINAL"] = df_lctos.apply(
-            lambda r: Decimal(str(r.get("VL_D", "0")))
-            - Decimal(str(r.get("VL_C", "0"))),
-            axis=1,
-        )
+
+        # --- Otimização: substituição de .apply(Decimal) por operações vetoriais ---
+        vl_dc = self._series_to_float(cast(pd.Series, df_lctos["VL_DC"]))
+        ind_d = df_lctos["IND_DC"] == "D"
+        ind_c = df_lctos["IND_DC"] == "C"
+
+        df_lctos["VL_D"] = np.where(ind_d, vl_dc, 0.0)
+        df_lctos["VL_C"] = np.where(ind_c, vl_dc, 0.0)
+        df_lctos["VL_SINAL"] = df_lctos["VL_D"] - df_lctos["VL_C"]
 
         if not df_plano.empty:
             df_lctos = pd.merge(
                 df_lctos, df_plano[["COD_CTA", "CONTA"]], on="COD_CTA", how="left"
             )
 
+        self._cache_lancamentos = df_lctos
         return df_lctos
 
+    @monitor_task("ECDProcessor", "gerar_balancetes")
     def gerar_balancetes(self) -> Dict[str, pd.DataFrame]:
         """
         Gera balancetes com Forward Roll, Reversão de Encerramento.
@@ -355,25 +387,20 @@ class ECDProcessor:
         )
         df_base["CNPJ"] = self.cnpj
 
-        # 2. Sinais e Tipagem
-        df_base["VL_SLD_INI_SIG"] = df_base.apply(
-            lambda r: self._converter_decimal(r.get("VL_SLD_INI"))
-            if r.get("IND_DC_INI") == "D"
-            else -self._converter_decimal(r.get("VL_SLD_INI")),
-            axis=1,
+        # 2. Sinais e Tipagem — Vetorizado com float64
+        vl_ini = self._series_to_float(cast(pd.Series, df_base["VL_SLD_INI"]))
+        vl_fin = self._series_to_float(cast(pd.Series, df_base["VL_SLD_FIN"]))
+        vl_deb = self._series_to_float(cast(pd.Series, df_base["VL_DEB"]))
+        vl_cred = self._series_to_float(cast(pd.Series, df_base["VL_CRED"]))
+
+        df_base["VL_SLD_INI_SIG"] = np.where(
+            df_base["IND_DC_INI"] == "D", vl_ini, -vl_ini
         )
-        df_base["VL_SLD_FIN_SIG"] = df_base.apply(
-            lambda r: self._converter_decimal(r.get("VL_SLD_FIN"))
-            if r.get("IND_DC_FIN") == "D"
-            else -self._converter_decimal(r.get("VL_SLD_FIN")),
-            axis=1,
+        df_base["VL_SLD_FIN_SIG"] = np.where(
+            df_base["IND_DC_FIN"] == "D", vl_fin, -vl_fin
         )
-        df_base["VL_DEB"] = cast(pd.Series, df_base["VL_DEB"]).apply(
-            self._converter_decimal
-        )
-        df_base["VL_CRED"] = cast(pd.Series, df_base["VL_CRED"]).apply(
-            self._converter_decimal
-        )
+        df_base["VL_DEB"] = vl_deb
+        df_base["VL_CRED"] = vl_cred
 
         # 3. Reversão de Encerramento (Indicator 'E')
         df_lctos = self.processar_lancamentos(df_plano)
@@ -397,16 +424,16 @@ class ECDProcessor:
 
                 df_base = pd.merge(
                     df_base, ajustes, on=["COD_CTA", "DT_FIN"], how="left"
-                ).fillna(Decimal("0.00"))
+                ).fillna(0.0)
                 df_base["VL_SLD_FIN_SIG"] = cast(
                     pd.Series, df_base["VL_SLD_FIN_SIG"]
-                ) - cast(pd.Series, df_base["VL_AJ_SINAL"])
-                df_base["VL_DEB"] = cast(pd.Series, df_base["VL_DEB"]) - cast(
-                    pd.Series, df_base["VL_AJ_D"]
-                )
-                df_base["VL_CRED"] = cast(pd.Series, df_base["VL_CRED"]) - cast(
-                    pd.Series, df_base["VL_AJ_C"]
-                )
+                ) - self._series_to_float(cast(pd.Series, df_base["VL_AJ_SINAL"]))
+                df_base["VL_DEB"] = cast(
+                    pd.Series, df_base["VL_DEB"]
+                ) - self._series_to_float(cast(pd.Series, df_base["VL_AJ_D"]))
+                df_base["VL_CRED"] = cast(
+                    pd.Series, df_base["VL_CRED"]
+                ) - self._series_to_float(cast(pd.Series, df_base["VL_AJ_C"]))
 
         # 4. Forward Roll (Continuidade Histórica) & I157
         df_base = df_base.sort_values(["COD_CTA", "DT_FIN"])
@@ -423,11 +450,9 @@ class ECDProcessor:
                 how="left",
                 suffixes=("", "_I157"),
             )
-            df_base["VL_I157_SIG"] = df_base.apply(
-                lambda r: self._converter_decimal(r.get("VL_SLD_INI_I157"))
-                if r.get("IND_DC_INI_I157") == "D"
-                else -self._converter_decimal(r.get("VL_SLD_INI_I157")),
-                axis=1,
+            vl_i157 = self._series_to_float(cast(pd.Series, df_base["VL_SLD_INI_I157"]))
+            df_base["VL_I157_SIG"] = np.where(
+                df_base["IND_DC_INI_I157"] == "D", vl_i157, -vl_i157
             )
             # Aplica o saldo do I157 apenas se não houver saldo anterior detectado (início da conta no novo plano)
             mask_primeiro_mes = cast(pd.Series, df_base["VL_SLD_FIN_ANT"]).isna()
@@ -436,11 +461,12 @@ class ECDProcessor:
                 "VL_SLD_INI_SIG",
             ] = df_base["VL_I157_SIG"]
 
-        df_base["VL_SLD_INI_SIG"] = df_base.apply(
-            lambda r: r.get("VL_SLD_FIN_ANT")
-            if pd.notna(r.get("VL_SLD_FIN_ANT"))
-            else r.get("VL_SLD_INI_SIG"),
-            axis=1,
+        # Forward Roll: usa np.where vetorial em vez de apply por linha
+        vl_ant = cast(pd.Series, df_base["VL_SLD_FIN_ANT"])
+        df_base["VL_SLD_INI_SIG"] = np.where(
+            vl_ant.notna(),
+            vl_ant,
+            cast(pd.Series, df_base["VL_SLD_INI_SIG"]),
         )
 
         # 5. Propagação Hierárquica (Plano da Empresa)
@@ -454,6 +480,7 @@ class ECDProcessor:
             "04_Balancetes_RFB": balancete_rfb,
         }
 
+    @monitor_task("ECDProcessor", "gerar_balancete_referencial")
     def gerar_balancete_referencial(self, df_saldos: pd.DataFrame) -> pd.DataFrame:
         """
         Gera o balancete na visão do Plano Referencial da RFB.
@@ -524,11 +551,11 @@ class ECDProcessor:
                 how="left",
             )
 
-            # Converte valores p/ Decimal
+            # --- float64 vetorial: substitui apply(Decimal) ---
             for col in cols_valores:
-                tab[col] = cast(pd.Series, tab[col]).apply(self._converter_decimal)
+                tab[col] = self._series_to_float(cast(pd.Series, tab[col]))
 
-            # Algoritmo Bottom-Up no Plano Referencial
+            # Algoritmo Bottom-Up no Plano Referencial — Vetorizado
             tab["NIVEL"] = (
                 cast(
                     pd.Series,
@@ -543,17 +570,21 @@ class ECDProcessor:
                 if nivel <= 1:
                     continue
 
-                agregados = (
+                # Agrega filhos e renomeia COD_SUP para CODIGO (chave do pai)
+                agg = (
                     tab[tab["NIVEL"] == nivel]
                     .groupby("COD_SUP")[cols_valores]
                     .sum()
                     .reset_index()
+                    .rename(columns={"COD_SUP": "CODIGO"})
                 )
+                # Sufixo para evitar conflito de colunas no merge
+                agg = agg.add_suffix("_AGG").rename(columns={"CODIGO_AGG": "CODIGO"})
 
-                for _, row in agregados.iterrows():
-                    idx_pai = tab.index[tab["CODIGO"] == row["COD_SUP"]]
-                    if not idx_pai.empty:
-                        tab.loc[idx_pai, cols_valores] += row[cols_valores]
+                tab = cast(pd.DataFrame, tab.merge(agg, on="CODIGO", how="left"))
+                for col in cols_valores:
+                    tab[col] = tab[col].add(tab[f"{col}_AGG"].fillna(0.0))
+                    tab.drop(columns=[f"{col}_AGG"], inplace=True)
 
             tab["DT_FIN"] = data
             if "COD_CTA_REF" in tab.columns:
@@ -582,23 +613,31 @@ class ECDProcessor:
                 on="COD_CTA",
                 how="left",
             )
+            # --- float64 vetorial: substitui apply(Decimal) ---
             for col in cols_valores:
-                tab[col] = cast(pd.Series, tab[col]).apply(self._converter_decimal)
+                tab[col] = self._series_to_float(cast(pd.Series, tab[col]))
 
+            # Algoritmo Bottom-Up (Empresa) — Vetorizado
             niveis = sorted(cast(pd.Series, tab["NIVEL"]).unique(), reverse=True)
             for nivel in niveis:
                 if nivel == 1:
                     continue
-                agregados = (
+
+                agg = (
                     tab[tab["NIVEL"] == nivel]
                     .groupby("COD_CTA_SUP")[cols_valores]
                     .sum()
                     .reset_index()
+                    .rename(columns={"COD_CTA_SUP": "COD_CTA"})
                 )
-                for _, row in agregados.iterrows():
-                    idx_pai = tab.index[tab["COD_CTA"] == row["COD_CTA_SUP"]]
-                    if not idx_pai.empty:
-                        tab.loc[idx_pai, cols_valores] += row[cols_valores]
+                agg = agg.add_suffix("_AGG").rename(columns={"COD_CTA_AGG": "COD_CTA"})
+
+                tab = cast(pd.DataFrame, tab.merge(agg, on="COD_CTA", how="left"))
+                for col in cols_valores:
+                    tab[col] = cast(pd.Series, tab[col]).add(
+                        cast(pd.Series, tab[f"{col}_AGG"]).fillna(0.0)
+                    )
+                    tab.drop(columns=[f"{col}_AGG"], inplace=True)
 
             tab["DT_FIN"] = data
             balancetes.append(tab)
@@ -607,6 +646,7 @@ class ECDProcessor:
             pd.concat(balancetes, ignore_index=True) if balancetes else pd.DataFrame()
         )
 
+    @monitor_task("ECDProcessor", "processar_demonstracoes")
     def processar_demonstracoes(self) -> Dict[str, pd.DataFrame]:
         """Processa Balanço (J100) e DRE (J150)."""
         df_j100 = self.blocos.get("dfECD_J100")

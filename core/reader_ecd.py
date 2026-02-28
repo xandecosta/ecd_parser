@@ -4,6 +4,7 @@ import os
 from datetime import datetime, date
 from decimal import Decimal, InvalidOperation
 from typing import Generator, Dict, Any, Optional
+from core.telemetry import monitor_task, TelemetryCollector
 
 # Configuração de Logs (Configurado via main.py ou __main__)
 
@@ -19,6 +20,8 @@ class ECDReader:
         self.schemas_dir = os.path.normpath(
             os.path.join(os.path.dirname(__file__), "..", "schemas", "ecd_layouts")
         )
+        self.telemetry: Optional[TelemetryCollector] = None
+        self.current_ecd_id = ""
 
     @property
     def ano_vigencia(self) -> Optional[int]:
@@ -30,6 +33,7 @@ class ECDReader:
                 return None
         return None
 
+    @monitor_task("ECDReader", "_detectar_layout")
     def _detectar_layout(self) -> None:
         """
         Detecta a versão do layout lendo o registro I010.
@@ -116,6 +120,7 @@ class ECDReader:
 
         return valor
 
+    @monitor_task("ECDReader", "processar_arquivo")
     def processar_arquivo(self) -> Generator[Dict[str, Any], None, None]:
         """
         Lê o arquivo linha a linha, gera PK/FK e converte dados.

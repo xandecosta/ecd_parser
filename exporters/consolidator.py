@@ -1,8 +1,10 @@
 import os
+import time
 import pandas as pd
 import logging
-from typing import List, Set
+from typing import List, Set, Optional
 from exporters.exporter import ECDExporter
+from core.telemetry import monitor_task, TelemetryCollector
 
 
 class ECDConsolidator:
@@ -13,6 +15,8 @@ class ECDConsolidator:
     def __init__(self, output_dir: str):
         self.output_dir = output_dir
         self.consolidated_dir = os.path.join(output_dir, "consolidado")
+        self.telemetry: Optional[TelemetryCollector] = None
+        self.current_ecd_id = "GLOBAL"
 
         # Filtros de tabelas que devem ser exportadas para Excel (Consolidado)
         self._excel_eligible_prefixes: Set[str] = {
@@ -27,9 +31,11 @@ class ECDConsolidator:
             "Scorecard",
         }
 
+    @monitor_task("ECDConsolidator", "_preparar_pasta")
     def _preparar_pasta(self) -> None:
         os.makedirs(self.consolidated_dir, exist_ok=True)
 
+    @monitor_task("ECDConsolidator", "_descobrir_tabelas")
     def _descobrir_tabelas(self, subpastas: List[str]) -> Set[str]:
         """Varre as subpastas para descobrir quais nomes de tabelas existem no disco."""
         tabelas_encontradas: Set[str] = set()
@@ -44,6 +50,7 @@ class ECDConsolidator:
                         tabelas_encontradas.add(nome_tabela)
         return tabelas_encontradas
 
+    @monitor_task("ECDConsolidator", "consolidar")
     def consolidar(self) -> None:
         """
         Percorre as pastas de saída e agrupa os dados por tabela de forma dinâmica.
@@ -68,6 +75,8 @@ class ECDConsolidator:
         tabelas = sorted(list(self._descobrir_tabelas(subpastas)))
         logging.info(f"Tabelas identificadas para consolidação: {tabelas}")
 
+        # --- TELEMETRIA: Loop de Consolidação ---
+        start_loop = time.time()
         for tabela in tabelas:
             dfs: List[pd.DataFrame] = []
             print(f"      Processando: {tabela}")
@@ -95,35 +104,49 @@ class ECDConsolidator:
                             logging.error(f"Erro ao ler {path}: {e}")
 
             if dfs:
-                # 3. Concatenação Eficiente
+                # 3. Concatenação
                 df_final = pd.concat(dfs, ignore_index=True)
 
-                # 4. Persistência Parquet (Sempre)
-                path_parquet = os.path.join(
-                    self.consolidated_dir, f"consolidado_{tabela}.parquet"
-                )
-                df_final.to_parquet(path_parquet, index=False, engine="pyarrow")
+                # --- TELEMETRIA: Exportação Consolidado ---
+                start_export = time.time()
 
-                # 5. Persistência Excel (Eligibilidade Dinâmica)
-                is_excel_eligible = any(
-                    tabela.startswith(pre) for pre in self._excel_eligible_prefixes
+                # 3. Salvamento: Parquet (Sempre)
+                parquet_path = os.path.join(
+                    self.consolidated_dir, f"CONSOLIDADO_{tabela}.parquet"
                 )
+                df_final.to_parquet(
+                    parquet_path, index=False, engine="pyarrow"
+                )  # Added engine="pyarrow" for consistency
 
-                if is_excel_eligible:
-                    path_excel = os.path.join(
-                        self.consolidated_dir, f"consolidado_{tabela}.xlsx"
+                # 4. Salvamento: CSV (Universal e sem limite de linhas)
+                if any(tabela.startswith(pre) for pre in self._excel_eligible_prefixes):
+                    csv_path = os.path.join(
+                        self.consolidated_dir, f"CONSOLIDADO_{tabela}.csv"
                     )
+                    # Aplica formatação PT-BR antes de salvar
+                    df_csv = ECDExporter.aplicar_formatacao_regional(df_final)
+                    df_csv.to_csv(
+                        csv_path,
+                        index=False,
+                        sep=";",
+                        encoding="utf-8-sig",
+                        decimal=",",
+                    )
+                    logging.info(f"      [CSV] Gerado: {os.path.basename(csv_path)}")
 
-                    # Proteção de Limite do Excel (1M linhas)
-                    if len(df_final) < 1048576:
-                        df_xlsx = ECDExporter.aplicar_formatacao_regional(df_final)
-                        df_xlsx.to_excel(path_excel, index=False, engine="openpyxl")
-                    else:
-                        logging.warning(
-                            f"Tabela {tabela} excedeu limite do Excel. Gerado apenas Parquet."
-                        )
+                if self.telemetry:
+                    self.telemetry.record_global(
+                        "ECDConsolidator",
+                        "Exportação Consolidado",
+                        time.time() - start_export,
+                    )
             else:
                 logging.debug(f"Sem dados para a tabela {tabela}")
+
+        if self.telemetry:
+            self.telemetry.record_global(
+                "ECDConsolidator", "Loop de Consolidação", time.time() - start_loop
+            )
 
         print(f"      [OK] Consolidação finalizada em: {self.consolidated_dir}")
 

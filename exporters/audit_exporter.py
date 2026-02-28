@@ -35,79 +35,86 @@ class AuditExporter:
     def exportar_dashboard(
         self, resultados: Dict[str, Any], nome_projeto: str, prefixo: str = ""
     ) -> List[str]:
-        """Gera o arquivo Excel consolidado com prefixo de data. Retorna lista de arquivos criados."""
-        # Máscara solicitada: DATA_07_Auditoria.xlsx
-        nome_final = f"{prefixo}_07_Auditoria.xlsx" if prefixo else "07_Auditoria.xlsx"
-        caminho_xlsx = os.path.join(self.pasta_saida, nome_final)
+        """
+        Gera CSVs de auditoria (Opção D):
+          1. CSV unificado: Scorecard + Descritivo dos Testes (5 colunas)
+          2. CSVs individuais por teste de detalhe
+        Retorna lista de arquivos criados.
+        """
         arquivos_gerados = []
 
         try:
-            with pd.ExcelWriter(caminho_xlsx, engine="openpyxl") as writer:
-                # 1. Aba Capa & Scorecard
-                df_scorecard = self._gerar_scorecard(resultados)
-                df_scorecard.to_excel(writer, sheet_name="Scorecard", index=False)
+            # --- 1. CSV UNIFICADO: Scorecard + Descritivo ---
+            df_desc = pd.DataFrame(
+                list(self.DESCRITIVO_TESTES.items()),
+                columns=cast(Any, ["Teste", "Descrição Metodológica"]),
+            )
+            df_score = self._gerar_scorecard_raw(resultados)
+            df_unificado = pd.merge(df_desc, df_score, on="Teste", how="left")
+            # Garante a ordem das colunas conforme solicitado
+            cols_ordem = [
+                "Teste",
+                "Descrição Metodológica",
+                "Status",
+                "Impacto Financeiro Est.",
+                "Mensagem",
+            ]
+            df_unificado = df_unificado[
+                [c for c in cols_ordem if c in df_unificado.columns]
+            ]
+            df_unificado = self.aplicar_formatacao_regional(
+                cast(pd.DataFrame, df_unificado)
+            )
 
-                # 2. Aba Descritivo
-                df_desc = pd.DataFrame(
-                    list(self.DESCRITIVO_TESTES.items()),
-                    columns=cast(Any, ["Teste", "Descrição Metodológica"]),
-                )
-                df_desc.to_excel(
-                    writer, sheet_name="Descritivo dos Testes", index=False
-                )
+            nome_scorecard = (
+                f"{prefixo}_07_Auditoria_Scorecard.csv"
+                if prefixo
+                else "07_Auditoria_Scorecard.csv"
+            )
+            caminho_scorecard = os.path.join(self.pasta_saida, nome_scorecard)
+            df_unificado.to_csv(
+                caminho_scorecard, index=False, sep=";", encoding="utf-8-sig"
+            )
+            arquivos_gerados.append(f"CSV:     {nome_scorecard}")
 
-                # 3. Abas Detalhadas por Teste
-                for teste, res in resultados.items():
-                    df_erro = (
-                        res.get("erros") if "erros" in res else res.get("detalhes")
-                    )
+            # --- 2. CSVs INDIVIDUAIS POR TESTE ---
+            for teste, res in resultados.items():
+                df_erro = res.get("erros") if "erros" in res else res.get("detalhes")
 
-                    if isinstance(df_erro, pd.DataFrame):
-                        if not df_erro.empty:
-                            df_fmt = self.aplicar_formatacao_regional(df_erro)
-                            aba_name = self._sanitizar_nome_aba(teste)
-                            df_fmt.to_excel(writer, sheet_name=aba_name, index=False)
-                    elif isinstance(df_erro, dict):
-                        # Caso especial: Dicionário de DataFrames (ex: Lei de Benford)
-                        for sub_nome, sub_df in df_erro.items():
-                            if isinstance(sub_df, pd.DataFrame) and not sub_df.empty:
-                                df_fmt = self.aplicar_formatacao_regional(sub_df)
-                                aba_name = self._sanitizar_nome_aba(sub_nome)
-                                df_fmt.to_excel(
-                                    writer, sheet_name=aba_name, index=False
-                                )
+                if isinstance(df_erro, pd.DataFrame):
+                    if not df_erro.empty:
+                        df_fmt = self.aplicar_formatacao_regional(df_erro)
+                        nome_csv = self._montar_nome_csv(prefixo, teste)
+                        caminho_csv = os.path.join(self.pasta_saida, nome_csv)
+                        df_fmt.to_csv(
+                            caminho_csv, index=False, sep=";", encoding="utf-8-sig"
+                        )
+                        arquivos_gerados.append(f"CSV:     {nome_csv}")
 
-                # --- Aba de Evidências ---
-                evidencias_all = []
-                for teste, res in resultados.items():
-                    if "evidencia" in res and isinstance(
-                        res["evidencia"], pd.DataFrame
-                    ):
-                        df_ev = res["evidencia"].copy()
-                        df_ev["TESTE_RELACIONADO"] = teste
-                        evidencias_all.append(df_ev)
+                elif isinstance(df_erro, dict):
+                    # Caso especial: Dicionário de DataFrames (ex: Lei de Benford)
+                    for sub_nome, sub_df in df_erro.items():
+                        if isinstance(sub_df, pd.DataFrame) and not sub_df.empty:
+                            df_fmt = self.aplicar_formatacao_regional(sub_df)
+                            nome_csv = self._montar_nome_csv(
+                                prefixo, f"{teste}_{sub_nome}"
+                            )
+                            caminho_csv = os.path.join(self.pasta_saida, nome_csv)
+                            df_fmt.to_csv(
+                                caminho_csv,
+                                index=False,
+                                sep=";",
+                                encoding="utf-8-sig",
+                            )
+                            arquivos_gerados.append(f"CSV:     {nome_csv}")
 
-                if evidencias_all:
-                    df_final_ev = pd.concat(evidencias_all, ignore_index=True)
-                    cols = ["TESTE_RELACIONADO"] + [
-                        c for c in df_final_ev.columns if c != "TESTE_RELACIONADO"
-                    ]
-                    df_final_ev = df_final_ev[cols]
-                    # Formata PT-BR também nas evidências
-                    df_final_ev = self.aplicar_formatacao_regional(
-                        cast(pd.DataFrame, df_final_ev)
-                    )
-                    df_final_ev.to_excel(
-                        writer, sheet_name="EVIDENCIAS_DETALHADAS", index=False
-                    )
-
-            self._aplicar_estilos_visuais(caminho_xlsx)
-            logger.info(f"Dashboard de Auditoria gerado: {nome_final}")
-            arquivos_gerados.append(f"EXCEL:   {nome_final}")
+            logger.info(
+                f"Relatório de Auditoria CSV gerado: {len(arquivos_gerados)} arquivo(s)"
+            )
             return arquivos_gerados
 
         except Exception as e:
-            logger.error(f"Erro ao gerar Dashboard de Auditoria: {e}")
+            logger.error(f"Erro ao gerar CSVs de Auditoria: {e}")
             return []
 
     def exportar_detalhes_parquet(
@@ -147,33 +154,44 @@ class AuditExporter:
 
         return arquivos_gerados
 
-    def _gerar_scorecard(self, resultados: Dict[str, Any]) -> pd.DataFrame:
+    def _gerar_scorecard_raw(self, resultados: Dict[str, Any]) -> pd.DataFrame:
+        """Retorna o scorecard sem formatação regional (para merge com Descritivo)."""
         rows = []
         for teste, res in resultados.items():
+            impacto = res.get("impacto", 0.0)
+            # Garantia absoluta: converte Decimal para float64
+            # para evitar erro de tipo objeto no Parquet/Arrow
+            try:
+                impacto_fmt = float(str(impacto))
+            except (ValueError, TypeError):
+                impacto_fmt = 0.0
+
             rows.append(
                 {
                     "Teste": teste,
                     "Status": res.get("status", "N/A"),
-                    "Impacto Financeiro Est.": res.get("impacto", 0),
+                    "Impacto Financeiro Est.": impacto_fmt,
                     "Mensagem": res.get("msg", ""),
                 }
             )
-        df_score = pd.DataFrame(rows)
-        return self.aplicar_formatacao_regional(df_score)
+        return pd.DataFrame(rows)
+
+    def _gerar_scorecard(self, resultados: Dict[str, Any]) -> pd.DataFrame:
+        """Retorna o scorecard com formatação regional (usado pelo exportar_detalhes_parquet)."""
+        return self.aplicar_formatacao_regional(self._gerar_scorecard_raw(resultados))
+
+    def _montar_nome_csv(self, prefixo: str, teste: str) -> str:
+        """Monta o nome do arquivo CSV seguindo o padrão: PERIODO_07_Auditoria_TESTE.csv"""
+        # Sanitiza: remove caracteres proibidos em nomes de arquivo
+        proibidos = [":", "\\", "/", "?", "*", "[", "]"]
+        nome_limpo = str(teste)
+        for p in proibidos:
+            nome_limpo = nome_limpo.replace(p, "_")
+        if prefixo:
+            return f"{prefixo}_07_Auditoria_{nome_limpo}.csv"
+        return f"07_Auditoria_{nome_limpo}.csv"
 
     @staticmethod
     def aplicar_formatacao_regional(df: pd.DataFrame) -> pd.DataFrame:
         """Proxy para o utilitário centralizado (Mantém compatibilidade e DRY)."""
         return apply_region_format(df)
-
-    def _sanitizar_nome_aba(self, nome: str) -> str:
-        """Limpa o nome da aba para os limites do Excel (31 chars e sem especiais)."""
-        proibidos = [":", "\\", "/", "?", "*", "[", "]"]
-        limpo = str(nome)[:31]
-        for p in proibidos:
-            limpo = limpo.replace(p, "_")
-        return limpo
-
-    def _aplicar_estilos_visuais(self, caminho_xlsx: str):
-        # Implementação futura se necessário (Beautification)
-        pass

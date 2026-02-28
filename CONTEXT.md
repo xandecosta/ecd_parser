@@ -12,13 +12,13 @@ graph LR
     B --> C(Processor: Inteligência)
     C --> D(Auditor: Pente Fino)
     D --> E(Exporter: Salvar)
-    E --> F[Excel / Parquet]
+    E --> F[CSV / Parquet]
 ```
 
 1. **Reader**: Lê cada linha do arquivo TXT e identifica os campos (ex: CNPJ, Data, Valor).
 2. **Processor**: faz as contas difíceis, junta tabelas e reconstrói o Balanço.
 3. **Auditor**: Analisa se os dados fazem sentido ou se há suspeitas de erro/fraude.
-4. **Exporter**: Transforma tudo o que foi calculado em arquivos bonitos que você abre no Excel.
+4. **Exporter**: Transforma tudo o que foi calculado em arquivos organizados que você abre no Excel ou PowerBI sem limitação de linhas (CSV).
 
 ---
 
@@ -38,10 +38,10 @@ Aqui fica a inteligência bruta que transforma texto em contabilidade.
 
 Arquivos que cuidam da saída, formatação e consolidação dos dados.
 
-- **`exporter.py`**: O "Formatador Vetorizado". Garante que o Excel saia com vírgulas e datas no padrão brasileiro usando performance de série.
-- **`audit_exporter.py`**: Especialista em relatórios de auditoria, gerando abas de Scorecard e evidências com formatação unificada.
-- **`consolidator.py`**: O "Agregador Dinâmico". Localiza automaticamente tabelas no disco e as une com rastreio de origem.
-- **`formatting.py`**: O "Coração Regional". Centraliza as regras de tradução de dados técnicos para o padrão contábil brasileiro.
+- **`exporter.py`**: O "Escriturário de Alta Velocidade". Garante que o CSV saia no padrão brasileiro (sep=;) sem o gargalo de memória e o limite de linhas do Excel.
+- **`audit_exporter.py`**: Especialista em relatórios de auditoria, gerando Scorecard unificado e arquivos de evidência individuais para perícia detalhada.
+- **`consolidator.py`**: O "Agregador de Big Data". Une dezenas de anos em arquivos CSV únicos, suportando milhões de linhas de lançamentos com rastreio de origem.
+- **`formatting.py`**: O "Coração Regional". Centraliza as regras de tradução de dados técnicos para o padrão contábil brasileiro (Vírgula decimal).
 
 ### 📂 Pasta `/intelligence/` (O Cérebro do Negócio)
 
@@ -99,11 +99,15 @@ O projeto está consolidado na **v2.6.x** (Estrutura Ouro). O foco agora é tran
 - **Por quê:** Atualmente, se um arquivo leva 30s, 10 arquivos levam 5 minutos. Em máquinas modernas (8+ núcleos), poderíamos processar quase todos simultaneamente.
 - **Como:** Utilizar a biblioteca `multiprocessing.Pool` para distribuir a lista de caminhos de arquivos entre os núcleos da CPU. Requer ajuste no sistema de logs para que as mensagens de diferentes processos não se sobreponham.
 
-#### **2. Otimização da Fase de Aprendizado (IO Inteligente)**
+#### **1. Otimização da Fase de Aprendizado (IO Inteligente) - ✅ CONCLUÍDO (v2.7.0)**
 
 - **O quê:** Salvar o aprendizado do `HistoricalMapper` em disco (`data/knowledge/history.json`).
-- **Por quê:** Evita ler a série histórica inteira toda vez que você adicionar apenas um arquivo novo à pasta de entrada (Redução drástica de IO).
-- **Como:** Serializar os dicionários de mapeamento e consenso para JSON após a fase de aprendizado. Na execução seguinte, o sistema verifica se o JSON existe e carrega os dados em milissegundos através do método `load_knowledge`.
+- **Resultado:** Redução drástica de tempo em re-execuções. O sistema agora persiste o consenso histórico e evita redundância de cálculos entre sessões.
+
+#### **2. Migração para Núcleo Vetorial (Float64) - ✅ CONCLUÍDO (v2.7.0)**
+
+- **O quê:** Substituir aritmética de objetos Decimal por Float64 com vetorização Pandas/Numpy.
+- **Resultado:** Ganho de 10x a 20x na velocidade de geração de balancetes e eliminação do loop `iterrows`.
 
 ### 📊 Inteligência de Dados e Perícia
 

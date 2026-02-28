@@ -1,9 +1,10 @@
 import pandas as pd
 import json
 import os
-from typing import Dict, Any, Optional, Set
+from typing import Dict, List, Any, Optional, Set
 from collections import Counter
 import logging
+from core.telemetry import monitor_task, TelemetryCollector
 
 logger = logging.getLogger(__name__)
 
@@ -15,7 +16,7 @@ class HistoricalMapper:
     histórica, esse conhecimento pode ser usado para preencher lacunas em outros anos.
     """
 
-    def __init__(self):
+    def __init__(self, history_file: Optional[str] = None):
         # Estrutura: { cnpj: { cod_cta: { ano: cod_cta_ref } } }
         self._knowledge: Dict[str, Dict[str, Dict[str, str]]] = {}
         # Estrutura: { cnpj: { cod_cta: cod_cta_ref_canonico } }
@@ -36,6 +37,13 @@ class HistoricalMapper:
         self._plan_knowledge: Dict[str, Dict[str, str]] = {}
         self._plan_consensus: Dict[str, str] = {}
 
+        # Tracking de arquivos processados para IO Inteligente
+        self._processed_files: Set[str] = set()
+        self.history_file = history_file
+        self.telemetry: Optional[TelemetryCollector] = None
+        self.current_ecd_id = "GLOBAL"
+
+    @monitor_task("HistoricalMapper", "learn")
     def learn(
         self,
         cnpj: str,
@@ -43,8 +51,12 @@ class HistoricalMapper:
         df_mapping: pd.DataFrame,
         cod_plan_ref: Optional[str] = None,
         accounting_ctas: Optional[Set[str]] = None,
+        file_id: Optional[str] = None,
     ) -> None:
         """Coleta mapeamentos de forma vetorial e limpa caches."""
+        if file_id:
+            self._processed_files.add(file_id)
+
         ano_str = str(ano)
         if cnpj not in self._knowledge:
             self._knowledge[cnpj] = {}
@@ -145,6 +157,7 @@ class HistoricalMapper:
 
         return result
 
+    @monitor_task("HistoricalMapper", "build_consensus")
     def build_consensus(self) -> None:
         """
         Analisa o histórico e define o mapeamento mais provável para cada conta.
@@ -254,6 +267,7 @@ class HistoricalMapper:
 
         return inferred
 
+    @monitor_task("HistoricalMapper", "save_knowledge")
     def save_knowledge(self, file_path: str):
         """Persiste o aprendizado em JSON para uso futuro (Evita re-aprendizado lento)."""
         # Converte Sets e Counters para formatos serializáveis
@@ -265,6 +279,7 @@ class HistoricalMapper:
             },
             "plan_knowledge": self._plan_knowledge,
             "plan_consensus": self._plan_consensus,
+            "processed_files": list(self._processed_files),
         }
         with open(file_path, "w", encoding="utf-8") as f:
             json.dump(serializable_data, f, indent=2, ensure_ascii=False)
@@ -284,6 +299,7 @@ class HistoricalMapper:
         self._knowledge = data.get("knowledge", {})
         self._plan_knowledge = data.get("plan_knowledge", {})
         self._plan_consensus = data.get("plan_consensus", {})
+        self._processed_files = set(data.get("processed_files", []))
 
         # Reconverte Listas para Sets
         structures = data.get("account_structures", {})
