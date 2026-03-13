@@ -3,15 +3,17 @@ import json
 import os
 import logging
 import shutil
-from typing import Dict, Any, cast
+from typing import Dict, Any
 
 # Configuração de Logs
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 
 # Configurações de Caminho (Podem ser injetadas no futuro)
-_INPUT_CAMPOS = r"data/reference/ref_plan_fields_by_register.csv"
-_INPUT_REGISTROS = r"data/reference/ref_plan_registers_by_layout.csv"
-_OUTPUT_DIR = r"schemas/ecd_layouts"
+# Configurações de Caminho (Relativos à raiz do projeto)
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_INPUT_CAMPOS = os.path.join(BASE_DIR, "data", "reference", "ref_plan_fields_by_register.csv")
+_INPUT_REGISTROS = os.path.join(BASE_DIR, "data", "reference", "ref_plan_registers_by_layout.csv")
+_OUTPUT_DIR = os.path.join(BASE_DIR, "schemas", "ecd_layouts")
 
 
 def _load_and_clean_csv(path: str) -> pd.DataFrame:
@@ -23,18 +25,16 @@ def _load_and_clean_csv(path: str) -> pd.DataFrame:
     # Normaliza nomes de colunas (strip)
     df.columns = pd.Index([str(c).strip() for c in df.columns])
     # Limpa espaços em branco em todas as células de texto
-    return cast(
-        pd.DataFrame, df.apply(lambda x: x.str.strip() if x.dtype == "object" else x)
-    )
+    return df.apply(lambda x: x.str.strip() if x.dtype == "object" else x) # type: ignore
 
 
-def _safe_int_convert(series: pd.Series, default: int = 0) -> pd.Series:
+def _safe_int_convert(series: Any, default: int = 0) -> pd.Series:
     """Converte série para inteiro de forma resiliente."""
     # Trata placeholders comuns da RFB antes da conversão
     s_clean = series.replace({"-": "0", "": str(default), None: str(default)})
     return (
-        cast(pd.Series, pd.to_numeric(s_clean, errors="coerce"))
-        .fillna(default)
+        pd.to_numeric(s_clean, errors="coerce")
+        .fillna(default) # type: ignore
         .astype(int)
     )
 
@@ -59,11 +59,9 @@ def compile_ecd_layouts():
 
         # 3. Tipagem de Colunas Críticas
         for col in ["Decimal", "Ordem", "Tamanho"]:
-            df_campos[col] = _safe_int_convert(cast(pd.Series, df_campos[col]))
+            df_campos[col] = _safe_int_convert(df_campos[col]) # type: ignore
 
-        df_registros["Nivel"] = _safe_int_convert(
-            cast(pd.Series, df_registros["Nivel"])
-        )
+        df_registros["Nivel"] = _safe_int_convert(df_registros["Nivel"]) # type: ignore
 
         # 4. Processamento Otimizado por Versão (Vectorized GroupBy)
         # Agrupamos por versão para evitar .loc repetitivos
@@ -99,16 +97,16 @@ def compile_ecd_layouts():
                 if reg_str not in map_niveis:
                     continue
 
-                # Monta lista de campos ordenada
+                # Monta lista de campos ordenada (VETORIZADO)
                 campos_ordenados = group_reg.sort_values("Ordem")
                 lista_campos = [
                     {
-                        "nome": row["CampoUnico"],
-                        "tipo": row["Tipo"],
-                        "tamanho": int(row["Tamanho"]),
-                        "decimal": int(row["Decimal"]),
+                        "nome": r["CampoUnico"],
+                        "tipo": r["Tipo"],
+                        "tamanho": int(r["Tamanho"]),
+                        "decimal": int(r["Decimal"]),
                     }
-                    for _, row in campos_ordenados.iterrows()
+                    for r in campos_ordenados.to_dict("records")
                 ]
 
                 schema_json[reg_str] = {

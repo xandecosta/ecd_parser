@@ -1,7 +1,7 @@
 import pandas as pd
 import json
 import os
-from typing import Dict, List, Any, Optional, Set
+from typing import Dict, List, Any, Optional, Set, cast
 from collections import Counter
 import logging
 from core.telemetry import monitor_task, TelemetryCollector
@@ -15,7 +15,6 @@ class HistoricalMapper:
     Foca na consistência temporal: se uma conta foi mapeada em qualquer ano da série
     histórica, esse conhecimento pode ser usado para preencher lacunas em outros anos.
     """
-
     def __init__(self, history_file: Optional[str] = None):
         # Estrutura: { cnpj: { cod_cta: { ano: cod_cta_ref } } }
         self._knowledge: Dict[str, Dict[str, Dict[str, str]]] = {}
@@ -57,6 +56,7 @@ class HistoricalMapper:
         if file_id:
             self._processed_files.add(file_id)
 
+        cnpj = str(cnpj).strip().replace(".", "").replace("/", "").replace("-", "")
         ano_str = str(ano)
         if cnpj not in self._knowledge:
             self._knowledge[cnpj] = {}
@@ -79,17 +79,21 @@ class HistoricalMapper:
             return
 
         # VETORIZAÇÃO OURO: Elimina itertuples/iterrows
-        # Preparamos o DataFrame (Clean strings + Drop NAs)
-        df_clean = df_mapping.dropna(subset=["COD_CTA", "COD_CTA_REF"]).copy()
+        # Cria cópia explícita para evitar SettingWithCopyWarning
+        df_clean = cast(pd.DataFrame, df_mapping.dropna(subset=["COD_CTA", "COD_CTA_REF"])).copy()
         if df_clean.empty:
             return
 
-        df_clean["COD_CTA"] = df_clean["COD_CTA"].astype(str).str.strip()
-        df_clean["COD_CTA_REF"] = df_clean["COD_CTA_REF"].astype(str).str.strip()
+        # Operações vetorizadas em memória
+        # Nota: Usamos assign para garantir imutabilidade no fluxo
+        df_clean = cast(pd.DataFrame, df_clean.assign(
+            COD_CTA=df_clean["COD_CTA"].astype(str).str.strip(),
+            COD_CTA_REF=df_clean["COD_CTA_REF"].astype(str).str.strip()
+        ))
 
         # 3. Aprende o Mapeamento de Contas
-        mapping_dict = dict(zip(df_clean["COD_CTA"], df_clean["COD_CTA_REF"]))
-        for cta, ref in mapping_dict.items():
+        # zip é muito mais rápido que iterrows para criar dicionários
+        for cta, ref in zip(df_clean["COD_CTA"], df_clean["COD_CTA_REF"]):
             if cta not in self._knowledge[cnpj]:
                 self._knowledge[cnpj][cta] = {}
             self._knowledge[cnpj][cta][ano_str] = ref
@@ -281,9 +285,20 @@ class HistoricalMapper:
             "plan_consensus": self._plan_consensus,
             "processed_files": list(self._processed_files),
         }
-        with open(file_path, "w", encoding="utf-8") as f:
-            json.dump(serializable_data, f, indent=2, ensure_ascii=False)
-        logger.info(f"Conhecimento histórico salvo em: {file_path}")
+        
+        # Atomic Write Pattern: Escreve em temp e renomeia atomicamente
+        # Isso previne corrupção do arquivo se o processo morrer no meio da escrita
+        temp_file = f"{file_path}.tmp"
+        try:
+            with open(temp_file, "w", encoding="utf-8") as f:
+                json.dump(serializable_data, f, indent=2, ensure_ascii=False)
+            
+            os.replace(temp_file, file_path)
+            logger.info(f"Conhecimento histórico persistido com segurança em: {file_path}")
+        except Exception as e:
+            logger.error(f"Falha ao salvar conhecimento histórico: {e}")
+            if os.path.exists(temp_file):
+                os.remove(temp_file)
 
     def load_knowledge(self, file_path: str):
         """Carrega conhecimento prévio do disco."""

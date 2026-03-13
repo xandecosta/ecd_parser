@@ -89,7 +89,7 @@ class ECDAuditor:
         # --- AJUSTE FORENSE: Ignorar Lançamentos de Encerramento ('E') ---
         # Pois o balancete recebido do processor já teve esses saldos revertidos.
         if "IND_LCTO" in df_d.columns:
-            df_d = df_d[cast(pd.Series, df_d["IND_LCTO"]).str.upper() != "E"].copy()
+            df_d = df_d[df_d["IND_LCTO"].str.upper() != "E"].copy()
 
         # Agregação do Diário
         agg_diario = (
@@ -113,13 +113,13 @@ class ECDAuditor:
             )
 
         if "IND_CTA" in df_b.columns:
-            df_b = df_b[cast(pd.Series, df_b["IND_CTA"]).str.upper() == "A"].copy()
+            df_b = df_b[df_b["IND_CTA"].str.upper() == "A"].copy()
 
         # Merge para confronto
         # Usamos outer join para pegar lançamentos sem saldo e saldos sem lançamentos
         df_conf = pd.merge(
-            cast(pd.DataFrame, agg_diario),
-            cast(pd.DataFrame, df_b[["COD_CTA", "PERIODO", "VL_DEB", "VL_CRED"]]),
+            agg_diario,
+            df_b[["COD_CTA", "PERIODO", "VL_DEB", "VL_CRED"]],
             on=["COD_CTA", "PERIODO"],
             how="outer",
             suffixes=("_DIARIO", "_RAZAO"),
@@ -133,7 +133,7 @@ class ECDAuditor:
         if "CONTA" not in df_conf.columns and not self.df_plano.empty:
             df_conf = pd.merge(
                 df_conf,
-                cast(pd.DataFrame, self.df_plano[["COD_CTA", "CONTA"]]),
+                self.df_plano[["COD_CTA", "CONTA"]],
                 on="COD_CTA",
                 how="left",
             )
@@ -204,7 +204,7 @@ class ECDAuditor:
 
         # Garante integridade de tipos
         df_b["NIVEL"] = (
-            cast(pd.Series, pd.to_numeric(df_b["NIVEL"], errors="coerce"))
+            pd.to_numeric(df_b["NIVEL"], errors="coerce")
             .fillna(0)
             .astype(int)
         )
@@ -224,7 +224,7 @@ class ECDAuditor:
                 df_b, self.df_plano[["COD_CTA", "IND_CTA"]], on="COD_CTA", how="left"
             )
 
-        mask_analiticas = cast(pd.Series, df_b["IND_CTA"]).str.upper() == "A"
+        mask_analiticas = df_b["IND_CTA"].str.upper() == "A"
         df_analiticas = df_b[mask_analiticas].copy()
 
         # Se não tem analíticas, falha
@@ -244,58 +244,40 @@ class ECDAuditor:
         periodos = df_b["DT_FIN"].unique()
 
         for periodo in periodos:
-            # Fatia do mês
-            df_mes = df_b[df_b["DT_FIN"] == periodo].copy()
-
-            # Precisamos de todas as contas do plano para a hierarquia, nao so as com saldo
-            # Mas para cálculo, só importa quem tem saldo. A estrutura vem do df_mes completo?
-            # Melhor usar o df_plano para a estrutura completa de pais/filhos
-
-            # Vamos simplificar: testar se para cada conta sintética, o saldo dela == soma dos filhos imediatos
-            # Isso é mais robusto e menos dependente de recálculo total.
-
-            mask_sinteticas = cast(pd.Series, df_mes["IND_CTA"]).str.upper() == "S"
+            df_mes = df_b[df_b["DT_FIN"] == periodo]
+            mask_sinteticas = df_mes["IND_CTA"].astype(str).str.upper() == "S" # type: ignore
             df_sint = df_mes[mask_sinteticas]
+            
+            if df_sint.empty: # type: ignore
+                continue
 
-            for idx, row in cast(pd.DataFrame, df_sint).iterrows():
-                conta_pai = row["COD_CTA"]
-                saldo_informado = row["VL_SLD_FIN_SIG"]
-
-                # Busca filhos no df_mes (que tem filhos analíticos E sintéticos de nível inferior)
-                # Filhos diretos são aqueles cujo COD_CTA_SUP == conta_pai
-                filhos = df_mes[df_mes["COD_CTA_SUP"] == conta_pai]
-
-                if cast(pd.DataFrame, filhos).empty:
-                    # Sintética sem filhos com saldo? Pode acontecer. Se saldo != 0, alerta.
-                    if saldo_informado != 0:
-                        divergencias.append(
-                            {
-                                "COD_CTA": conta_pai,
-                                "CONTA": row.get("CONTA", "SEM_NOME"),
-                                "DT_FIN": periodo,
-                                "TIPO": "Sintética sem filhos com saldo",
-                                "DIFERENCA": saldo_informado,
-                            }
-                        )
-                    continue
-
-                saldo_calculado = filhos["VL_SLD_FIN_SIG"].sum()
-
-                if saldo_informado != saldo_calculado:
-                    diff = saldo_informado - saldo_calculado
-                    # Tolerância para float64
-                    if abs(diff) > 0.01:
-                        divergencias.append(
-                            {
-                                "COD_CTA": conta_pai,
-                                "CONTA": row.get("CONTA", "SEM_NOME"),
-                                "DT_FIN": periodo,
-                                "TIPO": "Erro de Soma Hierárquica",
-                                "DIFERENCA": diff,
-                                "VLR_INFORMADO": saldo_informado,
-                                "VLR_CALCULADO": saldo_calculado,
-                            }
-                        )
+            # Calculate sum of all children for each parent
+            df_filhos_agregados = df_mes.groupby("COD_CTA_SUP", as_index=False)["VL_SLD_FIN_SIG"].sum()
+            df_filhos_agregados.rename(columns={"VL_SLD_FIN_SIG": "VL_CALCULADO", "COD_CTA_SUP": "COD_CTA"}, inplace=True)
+            
+            # Merge with synthetics
+            df_compare = pd.merge(df_sint, df_filhos_agregados, on="COD_CTA", how="left")
+            
+            # Filhos em branco = 0 calculado
+            df_compare["VL_CALCULADO"] = df_compare["VL_CALCULADO"].fillna(0.0) # type: ignore
+            
+            # Tolerancia
+            mask_diverge = abs(df_compare["VL_SLD_FIN_SIG"] - df_compare["VL_CALCULADO"]) > 0.01
+            df_erros_mes = df_compare[mask_diverge]
+            
+            for _, row in df_erros_mes.iterrows():
+                tipo = "Sintética sem filhos com saldo" if pd.isna(row.get("VL_CALCULADO")) and row["VL_SLD_FIN_SIG"] != 0 else "Erro de Soma Hierárquica"
+                divergencias.append(
+                    {
+                        "COD_CTA": row["COD_CTA"],
+                        "CONTA": row.get("CONTA", "SEM_NOME"),
+                        "DT_FIN": periodo,
+                        "TIPO": tipo,
+                        "DIFERENCA": row["VL_SLD_FIN_SIG"] - row["VL_CALCULADO"],
+                        "VLR_INFORMADO": row["VL_SLD_FIN_SIG"],
+                        "VLR_CALCULADO": row["VL_CALCULADO"],
+                    }
+                )
 
         df_div = pd.DataFrame(divergencias)
 
@@ -357,7 +339,7 @@ class ECDAuditor:
         if "COD_CTA_REF" not in df_check.columns:
             if self.df_mapeamento is not None:
                 # Blindagem p/ IDE: garante que self.df_mapeamento é DataFrame
-                tab_i051 = cast(pd.DataFrame, self.df_mapeamento).copy()
+                tab_i051 = self.df_mapeamento.copy()
                 # Normalização pode ser necessária se I051 tiver prefixos
                 df_map_temp = tab_i051.copy()
                 if "I051_COD_CTA_REF" in df_map_temp.columns:
@@ -499,9 +481,9 @@ class ECDAuditor:
 
         # Critério: É Analítica E (Tem Saldo Inicial != 0 OU Tem Debito != 0 OU Tem Credito != 0)
         mask_relevante = (df_b["IND_CTA"].str.upper() == "A") & (
-            (cast(pd.Series, df_b["VL_SLD_INI_SIG"]) != 0)
-            | (cast(pd.Series, df_b["VL_DEB"]) != 0)
-            | (cast(pd.Series, df_b["VL_CRED"]) != 0)
+            (df_b["VL_SLD_INI_SIG"] != 0)
+            | (df_b["VL_DEB"] != 0)
+            | (df_b["VL_CRED"] != 0)
         )
 
         # Critério Órfã: COD_CTA_REF nulo ou vazio
@@ -513,20 +495,12 @@ class ECDAuditor:
         df_orfas = df_b[mask_relevante & mask_orfa].copy()
 
         # Agrupa por conta (pois a mesma conta aparece em 12 meses, não queremos reportar 12x)
-        # Pegamos o maior saldo do período para mostrar impacto
-        resumo_orfas = (
-            df_orfas.groupby("COD_CTA")
-            .agg(
-                {
-                    "VL_SLD_FIN_SIG": lambda x: (
-                        max(cast(pd.Series, x), key=abs)
-                        if not cast(pd.Series, x).empty
-                        else 0.0
-                    ),
-                }
-            )
-            .reset_index()
-        )
+        # Pegamos o maior saldo do período para mostrar impacto (Otimização Baseada em Index)
+        df_orfas_abs = df_orfas.copy()
+        df_orfas_abs["ABS_VAL"] = df_orfas_abs["VL_SLD_FIN_SIG"].abs()
+        
+        idx_max = df_orfas_abs.groupby("COD_CTA")["ABS_VAL"].idxmax()
+        resumo_orfas = df_orfas.loc[idx_max, ["COD_CTA", "VL_SLD_FIN_SIG"]].reset_index(drop=True)
 
         if resumo_orfas.empty:
             self.resultados["3.2_Contas_Orfas"] = {
@@ -591,14 +565,14 @@ class ECDAuditor:
 
         # Converte para string para pegar primeiro digito
         # Importante: Precisamos de valores brutos, sem filtro.
-        series_vals = pd.concat(cast(List[pd.Series], [vals_d, vals_c]))
+        series_vals = pd.concat([vals_d, vals_c])
 
         if series_vals.empty:
             return
 
         # Pega primeiro digito (1-9). Ignora 0 (embora filtro >0 ja resolva).
         # Remove caracteres nao numericos se houver, mas assumimos Decimal limpo.
-        digits = cast(pd.Series, series_vals).astype(str).str.lstrip().str[0]
+        digits = series_vals.astype(str).str.lstrip().str[0]
         digits = digits[digits.isin([str(i) for i in range(1, 10)])].astype(int)
 
         if len(digits) < 100:
@@ -669,15 +643,19 @@ class ECDAuditor:
             suspeitos_list = [df_benford.loc[idx_max, "DIGITO"]]
 
         # Casting explícito para garantir iterabilidade no loop (Linha 680)
-        digitos_suspeitos = cast(List[Any], suspeitos_list)
+        digitos_suspeitos = suspeitos_list
 
         df_lctos = self.df_diario.copy()
-
-        def get_digit(val):
-            s = str(abs(val)).replace(".", "").replace(",", "").lstrip("0")
-            return int(s[0]) if s else None
-
-        df_lctos["PRIMEIRO_DIGITO"] = df_lctos["VL_SINAL"].apply(get_digit)
+        
+        # Otimização Vetorial Matemática Ouro (Extrai 1º dígito usando log10 em Numpy em vez de Str Lstrip)
+        df_lctos["PRIMEIRO_DIGITO"] = None
+        mask_valid = df_lctos["VL_SINAL"] != 0
+        if mask_valid.any():
+            abs_vals = np.abs(df_lctos.loc[mask_valid, "VL_SINAL"])
+            # Extrai 1 dígito de x: floor(x / 10^{floor(log10(x))})
+            log_div = 10 ** np.floor(np.log10(abs_vals))
+            first_digits = np.floor(abs_vals / log_div)
+            df_lctos.loc[mask_valid, "PRIMEIRO_DIGITO"] = first_digits.astype(int)
 
         analise_rows = []
         for digito in digitos_suspeitos:
@@ -687,7 +665,7 @@ class ECDAuditor:
 
             # Top 10 valores por dígito
             top_valores = (
-                cast(pd.Series, df_viciado["VL_DC"])
+                df_viciado["VL_DC"]
                 .value_counts()
                 .head(10)
                 .reset_index()
@@ -701,10 +679,10 @@ class ECDAuditor:
                 )
 
                 # Conta e Histórico mais comuns
-                conta_top = cast(pd.Series, subset["COD_CTA"]).value_counts().index[0]
+                conta_top = subset["COD_CTA"].value_counts().index[0]
                 if "CONTA" in subset.columns:
                     conta_nome = (
-                        cast(pd.Series, subset["CONTA"]).value_counts().index[0]
+                        subset["CONTA"].value_counts().index[0]
                     )
                     conta_top = f"{conta_top} - {conta_nome}"
 
@@ -714,7 +692,7 @@ class ECDAuditor:
                     else ("I250_HIST" if "I250_HIST" in subset.columns else None)
                 )
                 hist_top = (
-                    cast(pd.Series, subset[hist_col]).value_counts().index[0]
+                    subset[hist_col].value_counts().index[0]
                     if hist_col
                     else "N/A"
                 )
@@ -769,12 +747,12 @@ class ECDAuditor:
 
             # Checa se o termo está na Conta ou no Histórico
             mask_conta_ruido = (
-                cast(pd.Series, df_dupl_raw["CONTA"])
+                df_dupl_raw["CONTA"]
                 .str.upper()
                 .str.contains(termos_ruido, na=False)
             )
             mask_hist_ruido = (
-                cast(pd.Series, df_dupl_raw["HIST"])
+                df_dupl_raw["HIST"]
                 .str.upper()
                 .str.contains(termos_ruido, na=False)
             )
@@ -785,15 +763,15 @@ class ECDAuditor:
             ).str.startswith("04.2.3")
 
             mask_tarifa_pequena = (
-                cast(pd.Series, df_dupl_raw["VL_SINAL"]).apply(abs) < 100
+                df_dupl_raw["VL_SINAL"].apply(abs) < 100
             ) & (mask_conta_ruido | mask_hist_ruido | mask_grupo_financeiro)
 
             # Filtro B: Ignorar Processamento em Lote (Batch)
             # Se uma conta tem MAIS DE 5 lançamentos idênticos no mesmo dia,
             # assumimos que é um padrão operacional (ex: Folha, Tarifas em massa)
             contagem_grupo = (
-                cast(pd.DataFrame, df_dupl_raw)
-                .groupby(subset_cols)[cast(pd.DataFrame, df_dupl_raw).columns[0]]
+                df_dupl_raw
+                .groupby(subset_cols)[df_dupl_raw.columns[0]]
                 .transform("count")
             )
             mask_batch = contagem_grupo > 5
@@ -803,12 +781,12 @@ class ECDAuditor:
             df_final_erros = pd.DataFrame()
 
         impacto = (
-            cast(pd.Series, df_final_erros["VL_SINAL"]).apply(abs).sum()
-            if not cast(pd.DataFrame, df_final_erros).empty
+            df_final_erros["VL_SINAL"].apply(abs).sum()
+            if not df_final_erros.empty
             else 0.0
         )
 
-        if cast(pd.DataFrame, df_final_erros).empty:
+        if df_final_erros.empty:
             self.resultados["4.2_Duplicidades"] = {
                 "status": "APROVADO",
                 "impacto": 0.0,
@@ -817,12 +795,12 @@ class ECDAuditor:
         else:
             # Adiciona nome da conta para o relatório se ainda não tiver
             if (
-                "CONTA" not in cast(pd.DataFrame, df_final_erros).columns
+                "CONTA" not in df_final_erros.columns
                 and not self.df_plano.empty
             ):
                 df_final_erros = pd.merge(
-                    cast(pd.DataFrame, df_final_erros),
-                    cast(pd.DataFrame, self.df_plano[["COD_CTA", "CONTA"]]),
+                    df_final_erros,
+                    self.df_plano[["COD_CTA", "CONTA"]],
                     on="COD_CTA",
                     how="left",
                 )
@@ -831,7 +809,7 @@ class ECDAuditor:
                 "status": "ALERTA",
                 "impacto": impacto,
                 "msg": f"{len(df_final_erros)} lançamentos duplicados suspeitos (filtrados por materialidade/histórico).",
-                "erros": cast(pd.DataFrame, df_final_erros).sort_values(
+                "erros": df_final_erros.sort_values(
                     ["DT_LCTO", "COD_CTA", "VL_D"]
                 ),
             }
@@ -850,8 +828,8 @@ class ECDAuditor:
         # Precisa ter natureza. Se não tiver, busca.
         if "COD_NAT" not in df_b.columns and not self.df_plano.empty:
             df_b = pd.merge(
-                cast(pd.DataFrame, df_b),
-                cast(pd.DataFrame, self.df_plano[["COD_CTA", "COD_NAT"]]),
+                df_b,
+                self.df_plano[["COD_CTA", "COD_NAT"]],
                 on="COD_CTA",
                 how="left",
             )
@@ -867,7 +845,7 @@ class ECDAuditor:
         # Simplificação: Contas com natureza '04'
 
         # Garante que é uma Series booleana para satisfazer o IDE
-        has_res = cast(pd.Series, (df_b["COD_NAT"] == "04")).any()
+        has_res = (df_b["COD_NAT"] == "04").any()
         if not has_res:
             self.resultados["4.3_Omissao_Encerramento"] = {
                 "status": "SKIPPED",
@@ -883,7 +861,7 @@ class ECDAuditor:
 
         df_res = df_b[
             (df_b["COD_NAT"] == "04")
-            & (cast(pd.Series, df_b["IND_CTA"]).str.upper() == "A")
+            & (df_b["IND_CTA"].str.upper() == "A")
         ].copy()
 
         if df_res.empty:
@@ -903,14 +881,14 @@ class ECDAuditor:
 
         # 1. Agrega lançamentos do tipo 'E' por conta
         df_d = self.df_diario.copy()
-        mask_e = cast(pd.Series, df_d["IND_LCTO"]).str.upper() == "E"
+        mask_e = df_d["IND_LCTO"].str.upper() == "E"
         df_e_total = df_d[mask_e].groupby("COD_CTA")["VL_SINAL"].sum().reset_index()
         df_e_total.rename(columns={"VL_SINAL": "VL_ENCERRAMENTO"}, inplace=True)
 
         # 2. Merge com o Balancete de Dezembro
         df_confronto = pd.merge(
-            cast(pd.DataFrame, df_final),
-            cast(pd.DataFrame, df_e_total),
+            df_final,
+            df_e_total,
             on="COD_CTA",
             how="left",
         ).fillna(0.0)
@@ -923,15 +901,15 @@ class ECDAuditor:
         # Adiciona nome da conta para o relatório
         if "CONTA" not in df_confronto.columns and not self.df_plano.empty:
             df_confronto = pd.merge(
-                cast(pd.DataFrame, df_confronto),
-                cast(pd.DataFrame, self.df_plano[["COD_CTA", "CONTA"]]),
+                df_confronto,
+                self.df_plano[["COD_CTA", "CONTA"]],
                 on="COD_CTA",
                 how="left",
             )
 
         # Filtra onde a sobra != 0
         erros = df_confronto[
-            abs(cast(pd.Series, df_confronto["SALDO_RESTANTE"])) > 0.01
+            abs(df_confronto["SALDO_RESTANTE"]) > 0.01
         ].copy()
         soma_erros = sum(abs(x) for x in erros["SALDO_RESTANTE"])
 
@@ -989,8 +967,8 @@ class ECDAuditor:
         # Merge com plano se precisar de nome
         if "CONTA" not in df_b.columns and not self.df_plano.empty:
             df_b = pd.merge(
-                cast(pd.DataFrame, df_b),
-                cast(pd.DataFrame, self.df_plano[["COD_CTA", "CONTA"]]),
+                df_b,
+                self.df_plano[["COD_CTA", "CONTA"]],
                 on="COD_CTA",
                 how="left",
             )
@@ -1001,8 +979,8 @@ class ECDAuditor:
             and "COD_CTA_REF" in self.df_plano.columns
         ):
             df_b = pd.merge(
-                cast(pd.DataFrame, df_b),
-                cast(pd.DataFrame, self.df_plano[["COD_CTA", "COD_CTA_REF"]]),
+                df_b,
+                self.df_plano[["COD_CTA", "COD_CTA_REF"]],
                 on="COD_CTA",
                 how="left",
             )
@@ -1016,14 +994,14 @@ class ECDAuditor:
         # --- AJUSTE FORENSE: Apenas Contas de Ativo (Natureza 01) ---
         if "COD_NAT" not in df_b.columns and not self.df_plano.empty:
             df_b = pd.merge(
-                cast(pd.DataFrame, df_b),
-                cast(pd.DataFrame, self.df_plano[["COD_CTA", "COD_NAT"]]),
+                df_b,
+                self.df_plano[["COD_CTA", "COD_NAT"]],
                 on="COD_CTA",
                 how="left",
             )
 
         # Filtro de Amostra: Apenas Analíticas de Ativo
-        mask_analitica_ativo = cast(pd.Series, df_b["IND_CTA"]).str.upper() == "A"
+        mask_analitica_ativo = df_b["IND_CTA"].str.upper() == "A"
 
         if "COD_NAT" in df_b.columns:
             # Garante comparação segura independente de ser float, int ou str
@@ -1037,7 +1015,7 @@ class ECDAuditor:
         # 1. Por Referencial (Plano Contas Referencial RFB - Grupo 1.01.01)
         if "COD_CTA_REF" in df_b.columns:
             mask_disponibilidade |= (
-                cast(pd.Series, df_b["COD_CTA_REF"])
+                df_b["COD_CTA_REF"]
                 .astype(str)
                 .str.startswith("1.01.01")
             )
@@ -1047,7 +1025,7 @@ class ECDAuditor:
             keywords = ["CAIXA", "BANCO", "DISPONIBILIDADE", "APLICAÇÃO", "CASH"]
             pattern = "|".join(keywords)
             mask_disponibilidade |= (
-                cast(pd.Series, df_b["CONTA"])
+                df_b["CONTA"]
                 .str.upper()
                 .str.contains(pattern, na=False)
             )
@@ -1057,7 +1035,7 @@ class ECDAuditor:
 
         erros = df_b[mask_estouro].copy()
 
-        if cast(pd.DataFrame, erros).empty:
+        if erros.empty:
             self.resultados["5.2_Estouro_Caixa"] = {
                 "status": "APROVADO",
                 "impacto": 0.0,
@@ -1092,8 +1070,8 @@ class ECDAuditor:
                 if c in self.df_plano.columns
             ]
             df_b = pd.merge(
-                cast(pd.DataFrame, df_b),
-                cast(pd.DataFrame, self.df_plano[cols_to_add]),
+                df_b,
+                self.df_plano[cols_to_add],
                 on="COD_CTA",
                 how="left",
                 suffixes=("", "_extra"),
@@ -1104,12 +1082,12 @@ class ECDAuditor:
 
         if "COD_NAT" in df_b.columns:
             mask_analitica_passivo &= (
-                cast(pd.Series, df_b["COD_NAT"]).astype(str).str.zfill(2) == "02"
+                df_b["COD_NAT"].astype(str).str.zfill(2) == "02"
             )
 
         if "IND_CTA" in df_b.columns:
             mask_analitica_passivo &= (
-                cast(pd.Series, df_b["IND_CTA"]).str.upper() == "A"
+                df_b["IND_CTA"].str.upper() == "A"
             )
 
         df_b_filtered = df_b[mask_analitica_passivo].copy()
@@ -1123,7 +1101,7 @@ class ECDAuditor:
 
         # Contas analíticas com saldo relevante que não tiveram nem DEB nem CRED o ano todo
         agg_contas = (
-            cast(pd.DataFrame, df_b_filtered)
+            df_b_filtered
             .groupby("COD_CTA")
             .agg(
                 {
@@ -1144,31 +1122,31 @@ class ECDAuditor:
 
         # Adiciona nome da conta para o relatório
         if (
-            "CONTA" not in cast(pd.DataFrame, estaticas).columns
+            "CONTA" not in estaticas.columns
             and not self.df_plano.empty
         ):
             estaticas = pd.merge(
-                cast(pd.DataFrame, estaticas),
-                cast(pd.DataFrame, self.df_plano[["COD_CTA", "CONTA"]]),
+                estaticas,
+                self.df_plano[["COD_CTA", "CONTA"]],
                 on="COD_CTA",
                 how="left",
             )
 
-        if cast(pd.DataFrame, estaticas).empty:
+        if estaticas.empty:
             self.resultados["5.3_Passivo_Ficticio"] = {
                 "status": "APROVADO",
                 "impacto": 0.0,
             }
         else:
-            impacto = sum(abs(x) for x in cast(pd.Series, estaticas["VL_SLD_FIN_SIG"]))
+            impacto = sum(abs(x) for x in estaticas["VL_SLD_FIN_SIG"])
             self.resultados["5.3_Passivo_Ficticio"] = {
                 "status": "ALERTA",
                 "impacto": impacto,
                 "msg": f"{len(estaticas)} contas de passivo sem movimentação no período.",
-                "detalhes": cast(pd.DataFrame, estaticas)[
+                "detalhes": estaticas[
                     ["COD_CTA", "CONTA", "VL_DEB", "VL_CRED", "VL_SLD_FIN_SIG"]
                 ]
-                if "CONTA" in cast(pd.DataFrame, estaticas).columns
+                if "CONTA" in estaticas.columns
                 else estaticas,
             }
 
@@ -1189,8 +1167,8 @@ class ECDAuditor:
                 else ["COD_CTA", "COD_NAT"]
             )
             df_b = pd.merge(
-                cast(pd.DataFrame, df_b),
-                cast(pd.DataFrame, self.df_plano[cols]),
+                df_b,
+                self.df_plano[cols],
                 on="COD_CTA",
                 how="left",
             )
@@ -1205,14 +1183,14 @@ class ECDAuditor:
         # --- AJUSTE FORENSE: Apenas Contas Analíticas ---
         if "IND_CTA" not in df_b.columns and not self.df_plano.empty:
             df_b = pd.merge(
-                cast(pd.DataFrame, df_b),
-                cast(pd.DataFrame, self.df_plano[["COD_CTA", "IND_CTA"]]),
+                df_b,
+                self.df_plano[["COD_CTA", "IND_CTA"]],
                 on="COD_CTA",
                 how="left",
             )
 
         if "IND_CTA" in df_b.columns:
-            df_b = df_b[cast(pd.Series, df_b["IND_CTA"]).str.upper() == "A"].copy()
+            df_b = df_b[df_b["IND_CTA"].str.upper() == "A"].copy()
 
         # Detectar Redutoras (heuristicamente por nome ou sinal esperado?)
         # 1. Por Nome: Palavras-chave de redutoras
@@ -1228,7 +1206,7 @@ class ECDAuditor:
             ]
             pattern_red = "|".join(keywords_red)
             mask_redutora = (
-                cast(pd.Series, df_b["CONTA"])
+                df_b["CONTA"]
                 .str.upper()
                 .str.contains(pattern_red, na=False)
             )
@@ -1236,7 +1214,7 @@ class ECDAuditor:
         # Filtro de Inversão:
         # ATIVO (01) deve ser Devedor (> 0 no nosso sistema). Se < 0 e não for redutora -> Inversão.
         mask_ativo_errado = (
-            (cast(pd.Series, df_b["COD_NAT"]).astype(str).str.zfill(2) == "01")
+            (df_b["COD_NAT"].astype(str).str.zfill(2) == "01")
             & (df_b["VL_SLD_FIN_SIG"] < -5)
             & (~mask_redutora)
         )  # Tolerância de R$ 5
@@ -1244,7 +1222,7 @@ class ECDAuditor:
         # PASSIVO (02 ou 03) deve ser Credor (< 0 no nosso sistema). Se > 0 e não for redutora -> Inversão.
         mask_passivo_errado = (
             (
-                cast(pd.Series, df_b["COD_NAT"])
+                df_b["COD_NAT"]
                 .astype(str)
                 .str.zfill(2)
                 .isin(["02", "03"])
@@ -1255,7 +1233,7 @@ class ECDAuditor:
 
         erros_df = df_b[mask_ativo_errado | mask_passivo_errado].copy()
 
-        if cast(pd.DataFrame, erros_df).empty:
+        if erros_df.empty:
             self.resultados["5.1_Inversao_Natureza"] = {
                 "status": "APROVADO",
                 "impacto": 0.0,
@@ -1264,7 +1242,7 @@ class ECDAuditor:
             # --- AJUSTE FORENSE: Evitar inflar impacto com saldo mensal ---
             # Pegamos apenas a última ocorrência de inversão de cada conta para o relatório
             ultimo_erro = (
-                cast(pd.DataFrame, erros_df)
+                erros_df
                 .sort_values("DT_FIN")
                 .groupby("COD_CTA")
                 .last()
@@ -1282,8 +1260,8 @@ class ECDAuditor:
 
     def _teste_consistencia_pl_resultado(self):
         if (
-            cast(pd.DataFrame, self.df_balancete).empty
-            or cast(pd.DataFrame, self.df_diario).empty
+            self.df_balancete.empty
+            or self.df_diario.empty
         ):
             self.resultados["5.4_Consistencia_PL_Resultado"] = {
                 "status": "SKIPPED",
@@ -1295,8 +1273,8 @@ class ECDAuditor:
         df_b = self.df_balancete.copy()
         if "COD_NAT" not in df_b.columns and not self.df_plano.empty:
             df_b = pd.merge(
-                cast(pd.DataFrame, df_b),
-                cast(pd.DataFrame, self.df_plano[["COD_CTA", "COD_NAT"]]),
+                df_b,
+                self.df_plano[["COD_CTA", "COD_NAT"]],
                 on="COD_CTA",
                 how="left",
             )
@@ -1304,22 +1282,22 @@ class ECDAuditor:
         # 2. Calcular Lucro/Prejuízo Apurado (Natureza 04 - Antes do Zeramento)
         # O Processor restaura saldos pré-zeramento, então o VL_SLD_FIN_SIG de Dezembro de contas 04
         # representa o resultado acumulado do ano.
-        df_dez = cast(pd.DataFrame, df_b)[
-            cast(pd.Series, df_b["DT_FIN"]).astype(str).str.contains("-12-31")
+        df_dez = df_b[
+            df_b["DT_FIN"].astype(str).str.contains("-12-31")
         ].copy()
 
         # Filtra apenas Analíticas de Resultado (04)
         if "IND_CTA" not in df_dez.columns and not self.df_plano.empty:
             df_dez = pd.merge(
-                cast(pd.DataFrame, df_dez),
-                cast(pd.DataFrame, self.df_plano[["COD_CTA", "IND_CTA"]]),
+                df_dez,
+                self.df_plano[["COD_CTA", "IND_CTA"]],
                 on="COD_CTA",
                 how="left",
             )
 
         mask_resultado = (
-            cast(pd.Series, df_dez["COD_NAT"]).astype(str).str.zfill(2) == "04"
-        ) & (cast(pd.Series, df_dez["IND_CTA"]).str.upper() == "A")
+            df_dez["COD_NAT"].astype(str).str.zfill(2) == "04"
+        ) & (df_dez["IND_CTA"].str.upper() == "A")
 
         df_apura = df_dez[mask_resultado]
         lucro_esperado = df_apura["VL_SLD_FIN_SIG"].sum()
@@ -1329,8 +1307,8 @@ class ECDAuditor:
         # Merge com plano para saber quem é 03
         if "COD_NAT" not in df_d.columns and not self.df_plano.empty:
             df_d = pd.merge(
-                cast(pd.DataFrame, df_d),
-                cast(pd.DataFrame, self.df_plano[["COD_CTA", "COD_NAT"]]),
+                df_d,
+                self.df_plano[["COD_CTA", "COD_NAT"]],
                 on="COD_CTA",
                 how="left",
             )

@@ -1,10 +1,10 @@
 import os
-import time
 import pandas as pd
 import logging
-from typing import List, Set, Optional
-from exporters.exporter import ECDExporter
+from typing import List, Set, Optional, Dict
 from core.telemetry import monitor_task, TelemetryCollector
+
+logger = logging.getLogger(__name__)
 
 
 class ECDConsolidator:
@@ -18,17 +18,10 @@ class ECDConsolidator:
         self.telemetry: Optional[TelemetryCollector] = None
         self.current_ecd_id = "GLOBAL"
 
-        # Filtros de tabelas que devem ser exportadas para Excel (Consolidado)
+        # Filtros de tabelas que devem ser exportadas para CSV amigável ao Excel
         self._excel_eligible_prefixes: Set[str] = {
-            "01_",
-            "02_",
-            "03_",
-            "04_",
-            "07_",
-            "BP",
-            "DRE",
-            "Balancete",
-            "Scorecard",
+            "01_", "02_", "03_", "04_", "07_",
+            "BP", "DRE", "Balancete", "Scorecard",
         }
 
     @monitor_task("ECDConsolidator", "_preparar_pasta")
@@ -55,100 +48,88 @@ class ECDConsolidator:
         """
         Percorre as pastas de saída e agrupa os dados por tabela de forma dinâmica.
         """
-        print("\n>>> INICIANDO CONSOLIDAÇÃO DINÂMICA DOS RELATÓRIOS...")
+        logger.info("Iniciando consolidação dinâmica dos relatórios...")
         self._preparar_pasta()
 
-        # 1. Localiza subpastas de períodos (Exclui a pasta 'consolidado' e 'file_logs')
+        # 1. Localiza subpastas de períodos
         pastas_ignorar = {"consolidado", "file_logs", "test_output"}
+        try:
+            entries = os.listdir(self.output_dir)
+        except OSError as e:
+            logger.error(f"Erro ao acessar diretório de saída: {e}")
+            return
+
         subpastas = [
             os.path.join(self.output_dir, f)
-            for f in os.listdir(self.output_dir)
+            for f in entries
             if os.path.isdir(os.path.join(self.output_dir, f))
             and f not in pastas_ignorar
         ]
 
         if not subpastas:
-            logging.warning("Nenhuma pasta de período encontrada para consolidar.")
+            logger.warning("Nenhuma pasta de período encontrada para consolidar.")
             return
 
-        # 2. Descoberta dinâmica de tabelas
-        tabelas = sorted(list(self._descobrir_tabelas(subpastas)))
-        logging.info(f"Tabelas identificadas para consolidação: {tabelas}")
+        # 2. Mapeamento dinâmico (Tabela -> Lista de Arquivos) para evitar varredura dupla
+        mapeamento_tabelas: Dict[str, List[str]] = {}
+        for pasta in subpastas:
+            periodo = os.path.basename(pasta)
+            try:
+                for f in os.listdir(pasta):
+                    if f.endswith(".parquet"):
+                        # Extrai nome da tabela (remove prefixo de data se houver)
+                        partes = f.split("_", 1)
+                        nome_tabela = partes[1].replace(".parquet", "") if len(partes) > 1 else f.replace(".parquet", "")
+                        
+                        if nome_tabela not in mapeamento_tabelas:
+                            mapeamento_tabelas[nome_tabela] = []
+                        mapeamento_tabelas[nome_tabela].append(os.path.join(pasta, f))
+            except OSError:
+                continue
 
-        # --- TELEMETRIA: Loop de Consolidação ---
-        start_loop = time.time()
-        for tabela in tabelas:
+        # 3. Processamento por Tabela
+        for tabela, caminhos in sorted(mapeamento_tabelas.items()):
+            logger.info(f"      Processando: {tabela} ({len(caminhos)} arquivos)")
             dfs: List[pd.DataFrame] = []
-            print(f"      Processando: {tabela}")
 
-            for pasta in subpastas:
-                periodo = os.path.basename(pasta)
-                # Tenta localizar o arquivo seguindo o padrão PERIOD_TABELA.parquet ou apenas TABELA.parquet
-                arquivos_possiveis = [
-                    os.path.join(pasta, f"{periodo}_{tabela}.parquet"),
-                    os.path.join(pasta, f"{tabela}.parquet"),
-                ]
+            for path in caminhos:
+                try:
+                    periodo = os.path.basename(os.path.dirname(path))
+                    df = pd.read_parquet(path)
+                    if not df.empty:
+                        if "ORIGEM_PERIODO" not in df.columns:
+                            df.insert(0, "ORIGEM_PERIODO", periodo)
+                        dfs.append(df)
+                except Exception as e:
+                    logger.error(f"Erro ao ler {path}: {e}")
 
-                for path in arquivos_possiveis:
-                    if os.path.exists(path):
-                        try:
-                            # VETORIZAÇÃO: read_parquet é extremamente eficiente
-                            df = pd.read_parquet(path)
-                            if not df.empty:
-                                # Adiciona coluna de origem para auditoria no consolidado
-                                if "ORIGEM_PERIODO" not in df.columns:
-                                    df.insert(0, "ORIGEM_PERIODO", periodo)
-                                dfs.append(df)
-                            break  # Encontrou o arquivo nesta pasta, para de procurar
-                        except Exception as e:
-                            logging.error(f"Erro ao ler {path}: {e}")
+            if not dfs:
+                continue
 
-            if dfs:
-                # 3. Concatenação
-                df_final = pd.concat(dfs, ignore_index=True)
+            # Concatenação e Salvamento
+            df_final = pd.concat(dfs, ignore_index=True)
+            del dfs # Limpeza explícita para ajudar o GC em tabelas grandes
 
-                # --- TELEMETRIA: Exportação Consolidado ---
-                start_export = time.time()
+            # A. Parquet Consolidado (Cru)
+            parquet_path = os.path.join(self.consolidated_dir, f"CONSOLIDADO_{tabela}.parquet")
+            df_final.to_parquet(parquet_path, index=False, engine="pyarrow")
 
-                # 3. Salvamento: Parquet (Sempre)
-                parquet_path = os.path.join(
-                    self.consolidated_dir, f"CONSOLIDADO_{tabela}.parquet"
+            # B. CSV Consolidado (Apenas se elegível)
+            if any(tabela.startswith(pre) or pre in tabela for pre in self._excel_eligible_prefixes):
+                csv_path = os.path.join(self.consolidated_dir, f"CONSOLIDADO_{tabela}.csv")
+                
+                # Padrão Ouro: Compatibilidade Excel PT-BR (BOM + sep=';')
+                # Mantemos o dado como float (ponto decimal) para não quebrar leituras futuras
+                df_final.to_csv(
+                    csv_path,
+                    index=False,
+                    sep=";",
+                    decimal=",",
+                    encoding="utf-8-sig"
                 )
-                df_final.to_parquet(
-                    parquet_path, index=False, engine="pyarrow"
-                )  # Added engine="pyarrow" for consistency
+                logger.info(f"      [CSV] Gerado: {os.path.basename(csv_path)}")
 
-                # 4. Salvamento: CSV (Universal e sem limite de linhas)
-                if any(tabela.startswith(pre) for pre in self._excel_eligible_prefixes):
-                    csv_path = os.path.join(
-                        self.consolidated_dir, f"CONSOLIDADO_{tabela}.csv"
-                    )
-                    # Aplica formatação PT-BR antes de salvar
-                    df_csv = ECDExporter.aplicar_formatacao_regional(df_final)
-                    df_csv.to_csv(
-                        csv_path,
-                        index=False,
-                        sep=";",
-                        encoding="utf-8-sig",
-                        decimal=",",
-                    )
-                    logging.info(f"      [CSV] Gerado: {os.path.basename(csv_path)}")
-
-                if self.telemetry:
-                    self.telemetry.record_global(
-                        "ECDConsolidator",
-                        "Exportação Consolidado",
-                        time.time() - start_export,
-                    )
-            else:
-                logging.debug(f"Sem dados para a tabela {tabela}")
-
-        if self.telemetry:
-            self.telemetry.record_global(
-                "ECDConsolidator", "Loop de Consolidação", time.time() - start_loop
-            )
-
-        print(f"      [OK] Consolidação finalizada em: {self.consolidated_dir}")
+        logger.info(f"Consolidação finalizada com sucesso em: {self.consolidated_dir}")
 
 
 if __name__ == "__main__":

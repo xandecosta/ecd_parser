@@ -124,7 +124,7 @@ class ECDProcessor:
 
     def _separar_blocos(self) -> None:
         """Divide os registros por REG e limpa prefixos redundantes."""
-        versoes_reg = cast(pd.Series, self.df_bruto["REG"]).unique()
+        versoes_reg = self.df_bruto["REG"].unique()
         for reg in versoes_reg:
             df_reg = (
                 self.df_bruto[self.df_bruto["REG"] == reg]
@@ -135,16 +135,11 @@ class ECDProcessor:
                 df_reg = df_reg.drop(columns=["REG"])
 
             prefixo = f"{reg}_"
-            df_reg.columns = pd.Index(
-                [
-                    str(c).replace(prefixo, "") if str(c).startswith(prefixo) else c
-                    for c in df_reg.columns
-                ]
-            )
+            df_reg.rename(columns=lambda c: str(c).replace(prefixo, "") if str(c).startswith(prefixo) else c, inplace=True) # type: ignore
 
             # Remove duplicatas de colunas que possam surgir na renomeação
             self.blocos[f"dfECD_{reg}"] = df_reg.loc[
-                :, ~pd.Index(df_reg.columns).duplicated()
+                :, ~df_reg.columns.duplicated()
             ].copy()
 
     @monitor_task("ECDProcessor", "_identificar_metadados_referenciais")
@@ -155,9 +150,9 @@ class ECDProcessor:
             return
 
         # 1. Identificação do Ano (DT_FIN) - Comum a todas as versões
-        val_0000 = cast(pd.Series, df_0000.iloc[0])
+        val_0000 = df_0000.iloc[0]
         dt_fin = val_0000.get("DT_FIN")
-        if hasattr(dt_fin, "year") and dt_fin is not None:
+        if isinstance(dt_fin, pd.Timestamp) or hasattr(dt_fin, "year"):
             self.ano_vigencia = int(getattr(dt_fin, "year"))
         elif isinstance(dt_fin, str) and len(dt_fin) >= 8:
             # Tenta DDMMYYYY ou YYYYMMDD
@@ -173,13 +168,13 @@ class ECDProcessor:
 
         # 2. Identificação do COD_PLAN_REF (Condicional por Versão)
         try:
-            versao_num = float(str(self.layout_versao)) if self.layout_versao else 0.0
+            versao_num = float(str(self.layout_versao).replace(",", ".")) if self.layout_versao else 0.0
         except ValueError:
             versao_num = 0.0
 
         if versao_num >= 8.0:
             # Moderno: Está no 0000
-            val_0000_2 = cast(pd.Series, df_0000.iloc[0])
+            val_0000_2 = df_0000.iloc[0]
             self.cod_plan_ref = str(val_0000_2.get("COD_PLAN_REF", ""))
         else:
             # Legado: Está no primeiro I051
@@ -191,7 +186,7 @@ class ECDProcessor:
             # --- NÍVEL 1.5: Inferência de Instituição ---
             if self.knowledge_base is not None:
                 # Cast Any para o KB para garantir que o método seja localizado
-                kb = cast(Any, self.knowledge_base)
+                kb = self.knowledge_base
                 inferred = kb.get_inferred_plan(
                     self.cnpj, ano_alvo=str(self.ano_vigencia)
                 )
@@ -224,9 +219,9 @@ class ECDProcessor:
             return 0.0
 
     @staticmethod
-    def _series_to_float(s: pd.Series) -> pd.Series:
+    def _series_to_float(s: Any) -> pd.Series:
         """Converte uma Series inteira para float64 vetorialmente (sem .apply)."""
-        return cast(pd.Series, pd.to_numeric(s, errors="coerce")).fillna(0.0)
+        return pd.to_numeric(s, errors="coerce").fillna(0.0) # type: ignore
 
     @monitor_task("ECDProcessor", "processar_plano_contas")
     def processar_plano_contas(self) -> pd.DataFrame:
@@ -277,58 +272,59 @@ class ECDProcessor:
         df_res["ORIGEM_MAP"] = "SEM_MAPEAMENTO"
 
         # 2. Marcamos quem já veio declarado via I051 no arquivo atual
-        mask_declarado_original = cast(pd.Series, df_res["COD_CTA_REF"]).notna() & (
-            cast(pd.Series, df_res["COD_CTA_REF"]).astype(str).str.strip() != ""
+        mask_declarado_original = df_res["COD_CTA_REF"].notna() & ( # type: ignore
+            df_res["COD_CTA_REF"].astype(str).str.strip() != "" # type: ignore
         )
         df_res.loc[mask_declarado_original, "ORIGEM_MAP"] = "I051"
 
         # 3. Executamos a Inferência Histórica apenas para as lacunas remanescentes
         if self.knowledge_base is not None:
-            mask_vazio = cast(pd.Series, df_res["COD_CTA_REF"]).isna() | (
-                cast(pd.Series, df_res["COD_CTA_REF"]).astype(str).str.strip() == ""
+            mask_vazio = df_res["COD_CTA_REF"].isna() | ( # type: ignore
+                df_res["COD_CTA_REF"].astype(str).str.strip() == "" # type: ignore
             )
             mask_analitica = (
-                cast(pd.Series, df_res["IND_CTA"]).astype(str).str.upper() == "A"
+                df_res["IND_CTA"].astype(str).str.upper() == "A" # type: ignore
             )
             mask_alvo = mask_vazio & mask_analitica
 
             if mask_alvo.any():
                 ano_str = str(self.ano_vigencia) if self.ano_vigencia else ""
 
-                def inferir_ref(row: pd.Series) -> pd.Series:
-                    cod_cta = str(row.get("COD_CTA", ""))
-                    cod_sup = str(row.get("COD_CTA_SUP", ""))
-                    if not cod_cta:
-                        return pd.Series([None, "SEM_COD_CTA"])
+                # OTIMIZAÇÃO VETORIAL OURO: Zipping lists >> DataFrame.apply()
+                cod_ctas = df_res.loc[mask_alvo, "COD_CTA"].astype(str).tolist()
+                cod_sups = df_res.loc[mask_alvo, "COD_CTA_SUP"].astype(str).tolist()
+                
+                refs = []
+                origens = []
+                mapper = self.knowledge_base
+                
+                for cta, sup in zip(cod_ctas, cod_sups):
+                    if not cta:
+                        refs.append(None)
+                        origens.append("SEM_COD_CTA")
+                    else:
+                        vinculo = mapper.get_mapping(self.cnpj, cta, ano_str, cod_sup=sup)
+                        refs.append(vinculo.get("COD_CTA_REF"))
+                        origens.append(vinculo.get("ORIGEM_MAP"))
 
-                    mapper = cast(Any, self.knowledge_base)
-                    vinculo = mapper.get_mapping(
-                        self.cnpj, cod_cta, ano_str, cod_sup=cod_sup
-                    )
-                    return pd.Series(
-                        [vinculo.get("COD_CTA_REF"), vinculo.get("ORIGEM_MAP")]
-                    )
-
-                novos_dados = df_res.loc[mask_alvo].apply(inferir_ref, axis=1)
-                if not novos_dados.empty:
-                    df_res.loc[mask_alvo, "COD_CTA_REF"] = novos_dados[0]
-                    df_res.loc[mask_alvo, "ORIGEM_MAP"] = novos_dados[1]
+                df_res.loc[mask_alvo, "COD_CTA_REF"] = refs
+                df_res.loc[mask_alvo, "ORIGEM_MAP"] = origens
 
         # 4. Limpeza final: ORIGEM_MAP deve ser vazio para contas SINTÉTICAS
         mask_sintetica = (
-            cast(pd.Series, df_res["IND_CTA"]).astype(str).str.upper() != "A"
+            df_res["IND_CTA"].astype(str).str.upper() != "A" # type: ignore
         )
         df_res.loc[mask_sintetica, "ORIGEM_MAP"] = ""
 
         if "CTA" in df_res.columns:
             df_res["CONTA"] = (
-                cast(pd.Series, df_res["COD_CTA"]).astype(str)
+                df_res["COD_CTA"].astype(str)
                 + " - "
-                + cast(pd.Series, df_res["CTA"]).astype(str).str.strip().str.upper()
+                + df_res["CTA"].astype(str).str.strip().str.upper() # type: ignore
             )
         # --- Cache: salva resultado para reuso dentro do mesmo ECD ---
-        self._cache_plano = cast(pd.DataFrame, df_res)
-        return self._cache_plano
+        self._cache_plano = df_res # type: ignore
+        return self._cache_plano # type: ignore
 
     @monitor_task("ECDProcessor", "processar_lancamentos")
     def processar_lancamentos(self, df_plano: pd.DataFrame) -> pd.DataFrame:
@@ -352,7 +348,7 @@ class ECDProcessor:
         df_lctos["CNPJ"] = self.cnpj
 
         # --- Otimização: substituição de .apply(Decimal) por operações vetoriais ---
-        vl_dc = self._series_to_float(cast(pd.Series, df_lctos["VL_DC"]))
+        vl_dc = self._series_to_float(df_lctos["VL_DC"])
         ind_d = df_lctos["IND_DC"] == "D"
         ind_c = df_lctos["IND_DC"] == "C"
 
@@ -388,10 +384,10 @@ class ECDProcessor:
         df_base["CNPJ"] = self.cnpj
 
         # 2. Sinais e Tipagem — Vetorizado com float64
-        vl_ini = self._series_to_float(cast(pd.Series, df_base["VL_SLD_INI"]))
-        vl_fin = self._series_to_float(cast(pd.Series, df_base["VL_SLD_FIN"]))
-        vl_deb = self._series_to_float(cast(pd.Series, df_base["VL_DEB"]))
-        vl_cred = self._series_to_float(cast(pd.Series, df_base["VL_CRED"]))
+        vl_ini = self._series_to_float(df_base["VL_SLD_INI"])
+        vl_fin = self._series_to_float(df_base["VL_SLD_FIN"])
+        vl_deb = self._series_to_float(df_base["VL_DEB"])
+        vl_cred = self._series_to_float(df_base["VL_CRED"])
 
         df_base["VL_SLD_INI_SIG"] = np.where(
             df_base["IND_DC_INI"] == "D", vl_ini, -vl_ini
@@ -427,13 +423,13 @@ class ECDProcessor:
                 ).fillna(0.0)
                 df_base["VL_SLD_FIN_SIG"] = cast(
                     pd.Series, df_base["VL_SLD_FIN_SIG"]
-                ) - self._series_to_float(cast(pd.Series, df_base["VL_AJ_SINAL"]))
+                ) - self._series_to_float(df_base["VL_AJ_SINAL"])
                 df_base["VL_DEB"] = cast(
                     pd.Series, df_base["VL_DEB"]
-                ) - self._series_to_float(cast(pd.Series, df_base["VL_AJ_D"]))
+                ) - self._series_to_float(df_base["VL_AJ_D"])
                 df_base["VL_CRED"] = cast(
                     pd.Series, df_base["VL_CRED"]
-                ) - self._series_to_float(cast(pd.Series, df_base["VL_AJ_C"]))
+                ) - self._series_to_float(df_base["VL_AJ_C"])
 
         # 4. Forward Roll (Continuidade Histórica) & I157
         df_base = df_base.sort_values(["COD_CTA", "DT_FIN"])
@@ -450,30 +446,36 @@ class ECDProcessor:
                 how="left",
                 suffixes=("", "_I157"),
             )
-            vl_i157 = self._series_to_float(cast(pd.Series, df_base["VL_SLD_INI_I157"]))
+            vl_i157 = self._series_to_float(df_base["VL_SLD_INI_I157"])
             df_base["VL_I157_SIG"] = np.where(
                 df_base["IND_DC_INI_I157"] == "D", vl_i157, -vl_i157
             )
             # Aplica o saldo do I157 apenas se não houver saldo anterior detectado (início da conta no novo plano)
-            mask_primeiro_mes = cast(pd.Series, df_base["VL_SLD_FIN_ANT"]).isna()
+            mask_primeiro_mes = df_base["VL_SLD_FIN_ANT"].isna()
             df_base.loc[
-                mask_primeiro_mes & cast(pd.Series, df_base["VL_I157_SIG"]).notna(),
+                mask_primeiro_mes & df_base["VL_I157_SIG"].notna(),
                 "VL_SLD_INI_SIG",
             ] = df_base["VL_I157_SIG"]
 
         # Forward Roll: usa np.where vetorial em vez de apply por linha
-        vl_ant = cast(pd.Series, df_base["VL_SLD_FIN_ANT"])
+        vl_ant = df_base["VL_SLD_FIN_ANT"]
         df_base["VL_SLD_INI_SIG"] = np.where(
             vl_ant.notna(),
             vl_ant,
-            cast(pd.Series, df_base["VL_SLD_INI_SIG"]),
+            df_base["VL_SLD_INI_SIG"],
         )
 
         # 5. Propagação Hierárquica (Plano da Empresa)
         balancete_empresa = self._propagar_hierarquia(df_base, df_plano)
+        if not balancete_empresa.empty:
+            for col in ["VL_SLD_INI_SIG", "VL_DEB", "VL_CRED", "VL_SLD_FIN_SIG"]:
+                balancete_empresa[col] = balancete_empresa[col].round(2)
 
         # 6. Balancete Referencial (baseRFB)
         balancete_rfb = self.gerar_balancete_referencial(df_base)
+        if not balancete_rfb.empty:
+            for col in ["VL_SLD_INI_SIG", "VL_DEB", "VL_CRED", "VL_SLD_FIN_SIG"]:
+                balancete_rfb[col] = balancete_rfb[col].round(2)
 
         return {
             "04_Balancetes_Mensais": balancete_empresa,
@@ -521,8 +523,8 @@ class ECDProcessor:
 
         # Filtra apenas registros que possuem mapeamento referencial
         df_mapeado = df_mapeado[
-            cast(pd.Series, df_mapeado["COD_CTA_REF"]).notna()
-            & (cast(pd.Series, df_mapeado["COD_CTA_REF"]) != "")
+            df_mapeado["COD_CTA_REF"].notna()
+            & (df_mapeado["COD_CTA_REF"] != "")
         ]
 
         if df_mapeado.empty:
@@ -537,7 +539,7 @@ class ECDProcessor:
 
         # 3. Consolidação Hierárquica no Plano Referencial
         balancetes_rfb = []
-        versoes_data = cast(pd.Series, df_analitico_ref["DT_FIN"]).unique()
+        versoes_data = df_analitico_ref["DT_FIN"].unique()
         for data in versoes_data:
             df_mes = df_analitico_ref[df_analitico_ref["DT_FIN"] == data].copy()
 
@@ -545,7 +547,7 @@ class ECDProcessor:
             tab = df_ref_schema.copy()
             tab = pd.merge(
                 tab,
-                cast(pd.DataFrame, df_mes),
+                df_mes,
                 left_on="CODIGO",
                 right_on="COD_CTA_REF",
                 how="left",
@@ -553,38 +555,41 @@ class ECDProcessor:
 
             # --- float64 vetorial: substitui apply(Decimal) ---
             for col in cols_valores:
-                tab[col] = self._series_to_float(cast(pd.Series, tab[col]))
+                tab[col] = self._series_to_float(tab[col])
 
             # Algoritmo Bottom-Up no Plano Referencial — Vetorizado
-            tab["NIVEL"] = (
-                cast(
-                    pd.Series,
-                    pd.to_numeric(cast(pd.Series, tab["NIVEL"]), errors="coerce"),
+            try:
+                tab["NIVEL"] = (
+                    cast(
+                        pd.Series,
+                        pd.to_numeric(tab["NIVEL"], errors="coerce"),
+                    )
+                    .fillna(0)
+                    .astype(int)
                 )
-                .fillna(0)
-                .astype(int)
-            )
-            niveis = sorted(cast(pd.Series, tab["NIVEL"]).unique(), reverse=True)
+                niveis = sorted(tab["NIVEL"].unique(), reverse=True)
 
-            for nivel in niveis:
-                if nivel <= 1:
-                    continue
+                for nivel in niveis:
+                    if nivel <= 1:
+                        continue
 
-                # Agrega filhos e renomeia COD_SUP para CODIGO (chave do pai)
-                agg = (
-                    tab[tab["NIVEL"] == nivel]
-                    .groupby("COD_SUP")[cols_valores]
-                    .sum()
-                    .reset_index()
-                    .rename(columns={"COD_SUP": "CODIGO"})
-                )
-                # Sufixo para evitar conflito de colunas no merge
-                agg = agg.add_suffix("_AGG").rename(columns={"CODIGO_AGG": "CODIGO"})
+                    # Agrega filhos e renomeia COD_SUP para CODIGO (chave do pai)
+                    agg = (
+                        tab[tab["NIVEL"] == nivel]
+                        .groupby("COD_SUP")[cols_valores]
+                        .sum()
+                        .reset_index()
+                        .rename(columns={"COD_SUP": "CODIGO"})
+                    )
+                    # Sufixo para evitar conflito de colunas no merge
+                    agg = agg.add_suffix("_AGG").rename(columns={"CODIGO_AGG": "CODIGO"})
 
-                tab = cast(pd.DataFrame, tab.merge(agg, on="CODIGO", how="left"))
-                for col in cols_valores:
-                    tab[col] = tab[col].add(tab[f"{col}_AGG"].fillna(0.0))
-                    tab.drop(columns=[f"{col}_AGG"], inplace=True)
+                    tab = tab.merge(agg, on="CODIGO", how="left")
+                    for col in cols_valores:
+                        tab[col] = tab[col].add(tab[f"{col}_AGG"].fillna(0.0))
+                        tab.drop(columns=[f"{col}_AGG"], inplace=True)
+            except Exception as e:
+                logger.error(f"Falha no rollup bottom-up do referencial: {e}")
 
             tab["DT_FIN"] = data
             if "COD_CTA_REF" in tab.columns:
@@ -592,7 +597,7 @@ class ECDProcessor:
             balancetes_rfb.append(tab)
 
         return (
-            cast(pd.DataFrame, pd.concat(balancetes_rfb, ignore_index=True))
+            pd.concat(balancetes_rfb, ignore_index=True)
             if balancetes_rfb
             else pd.DataFrame()
         )
@@ -604,21 +609,21 @@ class ECDProcessor:
         balancetes = []
         cols_valores = ["VL_SLD_INI_SIG", "VL_DEB", "VL_CRED", "VL_SLD_FIN_SIG"]
 
-        versoes_data = cast(pd.Series, df_saldos["DT_FIN"]).unique()
+        versoes_data = df_saldos["DT_FIN"].unique()
         for data in versoes_data:
             df_mes = df_saldos[df_saldos["DT_FIN"] == data].copy()
             tab = pd.merge(
                 df_plano,
-                cast(pd.DataFrame, df_mes)[cols_valores + ["COD_CTA"]],
+                df_mes[cols_valores + ["COD_CTA"]], # type: ignore
                 on="COD_CTA",
                 how="left",
             )
             # --- float64 vetorial: substitui apply(Decimal) ---
             for col in cols_valores:
-                tab[col] = self._series_to_float(cast(pd.Series, tab[col]))
+                tab[col] = self._series_to_float(tab[col])
 
             # Algoritmo Bottom-Up (Empresa) — Vetorizado
-            niveis = sorted(cast(pd.Series, tab["NIVEL"]).unique(), reverse=True)
+            niveis = sorted(tab["NIVEL"].unique(), reverse=True)
             for nivel in niveis:
                 if nivel == 1:
                     continue
@@ -632,13 +637,15 @@ class ECDProcessor:
                 )
                 agg = agg.add_suffix("_AGG").rename(columns={"COD_CTA_AGG": "COD_CTA"})
 
-                tab = cast(pd.DataFrame, tab.merge(agg, on="COD_CTA", how="left"))
+                tab = tab.merge(agg, on="COD_CTA", how="left")
                 for col in cols_valores:
-                    tab[col] = cast(pd.Series, tab[col]).add(
-                        cast(pd.Series, tab[f"{col}_AGG"]).fillna(0.0)
+                    tab[col] = tab[col].add(
+                        tab[f"{col}_AGG"].fillna(0.0)
                     )
                     tab.drop(columns=[f"{col}_AGG"], inplace=True)
 
+            for col in cols_valores:
+                tab[col] = tab[col].round(2)
             tab["DT_FIN"] = data
             balancetes.append(tab)
 

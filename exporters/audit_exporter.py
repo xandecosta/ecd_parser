@@ -73,7 +73,11 @@ class AuditExporter:
             )
             caminho_scorecard = os.path.join(self.pasta_saida, nome_scorecard)
             df_unificado.to_csv(
-                caminho_scorecard, index=False, sep=";", encoding="utf-8-sig"
+                caminho_scorecard,
+                index=False,
+                sep=";",
+                decimal=",",
+                encoding="utf-8-sig",
             )
             arquivos_gerados.append(f"CSV:     {nome_scorecard}")
 
@@ -87,7 +91,11 @@ class AuditExporter:
                         nome_csv = self._montar_nome_csv(prefixo, teste)
                         caminho_csv = os.path.join(self.pasta_saida, nome_csv)
                         df_fmt.to_csv(
-                            caminho_csv, index=False, sep=";", encoding="utf-8-sig"
+                            caminho_csv,
+                            index=False,
+                            sep=";",
+                            decimal=",",
+                            encoding="utf-8-sig",
                         )
                         arquivos_gerados.append(f"CSV:     {nome_csv}")
 
@@ -104,6 +112,7 @@ class AuditExporter:
                                 caminho_csv,
                                 index=False,
                                 sep=";",
+                                decimal=",",
                                 encoding="utf-8-sig",
                             )
                             arquivos_gerados.append(f"CSV:     {nome_csv}")
@@ -124,7 +133,7 @@ class AuditExporter:
         arquivos_gerados = []
 
         # 1. Exporta o Scorecard (Essencial para Consolidação Híbrida)
-        df_scorecard = self._gerar_scorecard(resultados)
+        df_scorecard = self._gerar_scorecard_raw(resultados)
         # Adiciona o período (prefixo) ao DataFrame do scorecard para identificação no consolidado
         if prefixo:
             df_scorecard.insert(0, "PERIODO", prefixo)

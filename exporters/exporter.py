@@ -35,12 +35,15 @@ class ECDExporter:
         dicionario_dfs: Dict[str, pd.DataFrame],
         nome_base: str,
         prefixo: str = "",
-        itens_adicionais: list = [],
+        itens_adicionais: Optional[list] = None,
         tempo_inicio: Optional[float] = None,
     ) -> None:
         """
         Exporta DataFrames para Parquet e CSV e centraliza logs.
         """
+        if itens_adicionais is None:
+            itens_adicionais = []
+
         start_export = time.time()
         log_gerados = []
 
@@ -67,12 +70,12 @@ class ECDExporter:
             ]
             if any(term in nome_tabela for term in termos_csv):
                 caminho_csv = os.path.join(self.path_saida, f"{nome_final}.csv")
-                df_csv = self.aplicar_formatacao_regional(df)
-                # utf-8-sig: BOM que garante abertura correta no Excel PT-BR
-                df_csv.to_csv(
+                # Compatibilidade Excel PT-BR: Usando sep=";" e decimal="," com utf-8-sig
+                df.to_csv(
                     caminho_csv,
                     index=False,
                     sep=";",
+                    decimal=",",
                     encoding="utf-8-sig",
                 )
                 log_gerados.append(f"CSV:     {os.path.basename(caminho_csv)}")

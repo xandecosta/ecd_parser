@@ -3,7 +3,7 @@ import logging
 import os
 from datetime import datetime, date
 from decimal import Decimal, InvalidOperation
-from typing import Generator, Dict, Any, Optional
+from typing import Generator, Dict, Any, Optional, Tuple
 from core.telemetry import monitor_task, TelemetryCollector
 
 # Configuração de Logs (Configurado via main.py ou __main__)
@@ -86,33 +86,30 @@ class ECDReader:
         if valor == "":
             return None
 
-        # --- Prioridade 1: Datas ---
-        # Verifica se é campo de data pelo nome
-        if "DT_" in nome_campo or "DATA" in nome_campo:
+        # --- Prioridade 1: Numéricos Reais (Alta Frequência) ---
+        # Verifica tipo antes de nome para performance
+        if tipo == "N" and decimal > 0:
+            try:
+                # Substitui vírgula por ponto para o Decimal
+                return Decimal(valor.replace(",", "."))
+            except (InvalidOperation, ValueError):
+                return None
+
+        # --- Prioridade 2: Datas ---
+        # Checa 'D' no tipo (se schema suportar) ou heurística de nome
+        if tipo == "D" or "DT_" in nome_campo or "DATA" in nome_campo:
             # Sanitização: Remove caracteres não numéricos se houver
             # Garante que tenha 8 digitos com zeros a esquerda (ex: 1012020 -> 01012020)
-            valor_data = valor.zfill(8)
+            valor_data = valor.strip().zfill(8)
 
             if len(valor_data) == 8 and valor_data.isdigit():
                 try:
                     return datetime.strptime(valor_data, "%d%m%Y").date()
                 except ValueError:
-                    logging.warning(f"Data inválida no campo {nome_campo}: {valor}")
+                    # Data inválida silenciosa para não quebrar fluxo, retorna string original
                     return valor  # Retorna string original se falhar parser
             else:
                 return valor
-
-        # --- Prioridade 2: Numéricos Reais (Precisão com Decimal) ---
-        if tipo == "N" and decimal > 0:
-            try:
-                # Substitui vírgula por ponto para o Decimal
-                valor_fmt = valor.replace(",", ".")
-                return Decimal(valor_fmt)
-            except (InvalidOperation, ValueError):
-                logging.warning(
-                    f"Erro de conversão Decimal no campo {nome_campo}: '{valor}'"
-                )
-                return None
 
         # --- Prioridade 3: Numéricos Inteiros ou Identificadores (Decimal == 0) ---
         # Se for tipo 'N' mas sem decimais (ex: código, CNPJ),
@@ -120,32 +117,66 @@ class ECDReader:
 
         return valor
 
+    def _iterar_linhas_seguras(self) -> Generator[Tuple[int, str], None, None]:
+        """
+        Generator robusto que blinda o parser contra falhas de IO e Encoding.
+        Sanitização Pré-Parser (Roadmap Item 5).
+        """
+        if not os.path.exists(self.caminho_arquivo):
+            raise FileNotFoundError(f"Arquivo não encontrado: {self.caminho_arquivo}")
+
+        try:
+            # SPED é ISO-8859-1 (Latin-1). 'replace' evita crash por byte inválido.
+            with open(self.caminho_arquivo, "r", encoding="latin-1", errors="replace") as f:
+                for i, linha in enumerate(f, 1):
+                    linha_limpa = linha.strip()
+                    # Ignora linhas vazias ou sem pipe inicial (estrutura básica quebrada)
+                    if not linha_limpa or not linha_limpa.startswith("|"):
+                        continue
+                    yield i, linha_limpa
+        except Exception as e:
+            logging.error(f"Erro crítico de IO na leitura do arquivo: {e}")
+            raise
+
     @monitor_task("ECDReader", "processar_arquivo")
-    def processar_arquivo(self) -> Generator[Dict[str, Any], None, None]:
+    def processar_arquivo(
+        self, blocos_selecionados: Optional[list] = None
+    ) -> Generator[Dict[str, Any], None, None]:
         """
         Lê o arquivo linha a linha, gera PK/FK e converte dados.
+        Args:
+            blocos_selecionados: Lista opcional de prefixos de blocos (ex: ['0', 'I']) 
+                                para leitura parcial.
         """
         if not self.schema:
             self._detectar_layout()
 
         logging.info(f"Iniciando processamento do arquivo: {self.caminho_arquivo}")
+        
+        # Se filtrado, converter para tupla para startswith eficiente
+        filtro_blocos = tuple(blocos_selecionados) if blocos_selecionados else None
 
         # Contexto de Pais: {nivel: pk_do_registro}
         contexto_pais: Dict[int, str] = {}
+        
+        # Controle de Logs para evitar flooding
+        warnings_count = 0
+        MAX_LOGS_WARNING = 50
 
-        with open(self.caminho_arquivo, "r", encoding="latin-1", errors="replace") as f:
-            for numero_linha, linha in enumerate(f, 1):
-                linha = linha.strip()
-                if not linha or not linha.startswith("|"):
-                    continue
-
+        for numero_linha, linha in self._iterar_linhas_seguras():
+            try:
                 partes = linha.split("|")
                 if len(partes) < 2:
                     continue
 
                 registro = partes[1]
 
-                # Ignorar Bloco C
+                # --- FILTRAGEM OURO ---
+                # Se houver filtro, pula se o registro não começar com o prefixo desejado
+                if filtro_blocos and not registro.startswith(filtro_blocos):
+                    continue
+
+                # Ignorar Bloco C (Geralmente desnecessário no ECD Contábil padrão)
                 if registro.startswith("C"):
                     continue
 
@@ -164,15 +195,19 @@ class ECDReader:
                 # Mais 1 se houver o pipe final (comum no SPED).
                 esperado_base = len(campos_layout) + 2
                 if len(partes) < esperado_base:
-                    logging.warning(
-                        f"Linha {numero_linha} ({registro}): Menos campos que o esperado. "
-                        f"Esperado >= {esperado_base}, Obtido {len(partes)}"
-                    )
+                    if warnings_count < MAX_LOGS_WARNING:
+                        logging.warning(
+                            f"Linha {numero_linha} ({registro}): Menos campos que o esperado. "
+                            f"Esperado >= {esperado_base}, Obtido {len(partes)}"
+                        )
+                        warnings_count += 1
                 elif len(partes) > esperado_base + 1:
-                    logging.warning(
-                        f"Linha {numero_linha} ({registro}): Mais campos que o esperado "
-                        f"(possível pipe extra). Obtido {len(partes)}"
-                    )
+                    if warnings_count < MAX_LOGS_WARNING:
+                        logging.warning(
+                            f"Linha {numero_linha} ({registro}): Mais campos que o esperado "
+                            f"(possível pipe extra). Obtido {len(partes)}"
+                        )
+                        warnings_count += 1
 
                 dados_registro = {"REG": registro, "LINHA_ORIGEM": numero_linha}
 
@@ -234,6 +269,12 @@ class ECDReader:
                 contexto_pais[nivel] = pk_atual
 
                 yield dados_registro
+
+            except Exception as e_linha:
+                # Garante que uma linha corrompida não aborte o arquivo inteiro
+                if warnings_count < MAX_LOGS_WARNING:
+                    logging.error(f"Erro fatal processando linha {numero_linha}: {e_linha}")
+                    warnings_count += 1
 
 
 if __name__ == "__main__":

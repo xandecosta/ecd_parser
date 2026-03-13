@@ -1,5 +1,6 @@
 import time
-from typing import Dict, Any
+from typing import Dict, Any, Callable, TypeVar, cast
+from functools import wraps
 
 
 class TelemetryCollector:
@@ -41,15 +42,27 @@ class TelemetryCollector:
     def get_ecd_metrics(self, ecd_id: str) -> Dict[str, Any]:
         return self.data.get(ecd_id, {})
 
+    def merge(self, other_data: Dict[str, Any]) -> None:
+        """
+        Funde dados de telemetria de processos paralelos neste coletor.
+        Utilizado pelo orquestrador principal para consolidar resultados.
+        """
+        if other_data:
+            self.data.update(other_data)
 
-def monitor_task(component_name: str, method_name: str):
+
+F = TypeVar("F", bound=Callable[..., Any])
+
+
+def monitor_task(component_name: str, method_name: str) -> Callable[[F], F]:
     """
     Decorator para medir o tempo de execução de métodos e registrar no TelemetryCollector.
     Requer que a instância da classe tenha um atributo 'telemetry' ou receba um.
     """
 
-    def decorator(func):
-        def wrapper(self, *args, **kwargs):
+    def decorator(func: F) -> F:
+        @wraps(func)
+        def wrapper(self: Any, *args: Any, **kwargs: Any) -> Any:
             # Tenta encontrar o coletor na instância ou nos argumentos
             telemetry = getattr(self, "telemetry", None)
             ecd_id = getattr(self, "current_ecd_id", "GLOBAL")
@@ -67,6 +80,6 @@ def monitor_task(component_name: str, method_name: str):
                     )
             return result
 
-        return wrapper
+        return cast(F, wrapper)
 
     return decorator

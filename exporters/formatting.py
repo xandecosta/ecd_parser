@@ -1,5 +1,4 @@
 import pandas as pd
-from typing import cast
 
 
 def apply_region_format(df: pd.DataFrame) -> pd.DataFrame:
@@ -42,4 +41,4 @@ def apply_region_format(df: pd.DataFrame) -> pd.DataFrame:
                     .str.replace(".", ",", regex=False)
                 )
 
-    return cast(pd.DataFrame, df_out)
+    return df_out
