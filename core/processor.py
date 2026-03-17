@@ -1,8 +1,8 @@
 import os
 import json
-import pandas as pd
+import pandas as pd # type: ignore
 import logging
-import numpy as np
+import numpy as np # type: ignore
 
 from typing import Dict, List, Any, Optional, cast
 from core.telemetry import monitor_task, TelemetryCollector
@@ -132,15 +132,15 @@ class ECDProcessor:
                 .copy()
             )
             if "REG" in df_reg.columns:
-                df_reg = df_reg.drop(columns=["REG"])
+                df_reg.drop(columns=["REG"], inplace=True)
 
             prefixo = f"{reg}_"
-            df_reg.rename(columns=lambda c: str(c).replace(prefixo, "") if str(c).startswith(prefixo) else c, inplace=True) # type: ignore
+            df_reg = df_reg.rename(columns=lambda c: str(c).removeprefix(prefixo) if str(c).startswith(prefixo) else c)
 
             # Remove duplicatas de colunas que possam surgir na renomeação
             self.blocos[f"dfECD_{reg}"] = df_reg.loc[
                 :, ~df_reg.columns.duplicated()
-            ].copy()
+            ]
 
     @monitor_task("ECDProcessor", "_identificar_metadados_referenciais")
     def _identificar_metadados_referenciais(self) -> None:
@@ -152,19 +152,27 @@ class ECDProcessor:
         # 1. Identificação do Ano (DT_FIN) - Comum a todas as versões
         val_0000 = df_0000.iloc[0]
         dt_fin = val_0000.get("DT_FIN")
-        if isinstance(dt_fin, pd.Timestamp) or hasattr(dt_fin, "year"):
-            self.ano_vigencia = int(getattr(dt_fin, "year"))
-        elif isinstance(dt_fin, str) and len(dt_fin) >= 8:
-            # Tenta DDMMYYYY ou YYYYMMDD
-            s_dt_fin = cast(str, dt_fin)
-            try:
+        
+        try:
+            if isinstance(dt_fin, pd.Timestamp) or hasattr(dt_fin, "year"):
+                self.ano_vigencia = int(getattr(dt_fin, "year"))
+            elif isinstance(dt_fin, str) and len(dt_fin) >= 8:
+                # Tenta DDMMYYYY ou YYYYMMDD
+                s_dt_fin: str = str(dt_fin)
                 self.ano_vigencia = (
                     int(s_dt_fin[:4])
                     if int(s_dt_fin[:4]) > 1900
                     else int(s_dt_fin[-4:])
                 )
-            except (ValueError, IndexError):
-                pass
+        except (ValueError, IndexError):
+            pass
+
+        # 1.5. Sincronização de CNPJ Ouro: Se self.cnpj está vazio, tenta buscar no Bloco 0000
+        if not self.cnpj or str(self.cnpj).strip() == "":
+            val_cnpj = df_0000.iloc[0].get("CNPJ") or df_0000.iloc[0].get("0000_CNPJ")
+            if val_cnpj and str(val_cnpj).strip() != "":
+                self.cnpj = str(val_cnpj).strip()
+                logger.info(f"CNPJ recuperado via Bloco 0000: {self.cnpj}")
 
         # 2. Identificação do COD_PLAN_REF (Condicional por Versão)
         try:
@@ -174,8 +182,8 @@ class ECDProcessor:
 
         if versao_num >= 8.0:
             # Moderno: Está no 0000
-            val_0000_2 = df_0000.iloc[0]
-            self.cod_plan_ref = str(val_0000_2.get("COD_PLAN_REF", ""))
+            df_ref = cast(pd.DataFrame, df_0000)
+            self.cod_plan_ref = str(df_ref.iloc[0].get("COD_PLAN_REF", "")) # type: ignore
         else:
             # Legado: Está no primeiro I051
             df_i051 = self.blocos.get("dfECD_I051")
@@ -184,9 +192,8 @@ class ECDProcessor:
 
         if not self.cod_plan_ref:
             # --- NÍVEL 1.5: Inferência de Instituição ---
-            if self.knowledge_base is not None:
-                # Cast Any para o KB para garantir que o método seja localizado
-                kb = self.knowledge_base
+            kb = self.knowledge_base
+            if kb is not None and hasattr(kb, "get_inferred_plan"):
                 inferred = kb.get_inferred_plan(
                     self.cnpj, ano_alvo=str(self.ano_vigencia)
                 )
@@ -272,18 +279,21 @@ class ECDProcessor:
         df_res["ORIGEM_MAP"] = "SEM_MAPEAMENTO"
 
         # 2. Marcamos quem já veio declarado via I051 no arquivo atual
-        mask_declarado_original = df_res["COD_CTA_REF"].notna() & ( # type: ignore
-            df_res["COD_CTA_REF"].astype(str).str.strip() != "" # type: ignore
+        s_ref_raw = cast(pd.Series, df_res["COD_CTA_REF"])
+        mask_declarado_original = s_ref_raw.notna() & (
+            s_ref_raw.astype(str).str.strip() != ""
         )
         df_res.loc[mask_declarado_original, "ORIGEM_MAP"] = "I051"
 
         # 3. Executamos a Inferência Histórica apenas para as lacunas remanescentes
         if self.knowledge_base is not None:
-            mask_vazio = df_res["COD_CTA_REF"].isna() | ( # type: ignore
-                df_res["COD_CTA_REF"].astype(str).str.strip() == "" # type: ignore
+            s_ref = cast(pd.Series, df_res["COD_CTA_REF"])
+            mask_vazio = s_ref.isna() | (
+                s_ref.astype(str).str.strip() == ""
             )
+            s_ind = cast(pd.Series, df_res["IND_CTA"])
             mask_analitica = (
-                df_res["IND_CTA"].astype(str).str.upper() == "A" # type: ignore
+                s_ind.astype(str).str.upper() == "A"
             )
             mask_alvo = mask_vazio & mask_analitica
 
@@ -293,26 +303,29 @@ class ECDProcessor:
                 # OTIMIZAÇÃO VETORIAL OURO: Zipping lists >> DataFrame.apply()
                 cod_ctas = df_res.loc[mask_alvo, "COD_CTA"].astype(str).tolist()
                 cod_sups = df_res.loc[mask_alvo, "COD_CTA_SUP"].astype(str).tolist()
+                descs = df_res.loc[mask_alvo, "CTA"].astype(str).tolist() if "CTA" in df_res.columns else [None] * len(cod_ctas)
                 
                 refs = []
                 origens = []
-                mapper = self.knowledge_base
+                kb = self.knowledge_base
                 
-                for cta, sup in zip(cod_ctas, cod_sups):
-                    if not cta:
-                        refs.append(None)
-                        origens.append("SEM_COD_CTA")
-                    else:
-                        vinculo = mapper.get_mapping(self.cnpj, cta, ano_str, cod_sup=sup)
-                        refs.append(vinculo.get("COD_CTA_REF"))
-                        origens.append(vinculo.get("ORIGEM_MAP"))
+                if kb is not None and hasattr(kb, "get_mapping"):
+                    for cta, sup, desc in zip(cod_ctas, cod_sups, descs):
+                        if not cta:
+                            refs.append(None)
+                            origens.append("SEM_COD_CTA")
+                        else:
+                            vinculo = kb.get_mapping(self.cnpj, cta, ano_str, cod_sup=sup, descricao=desc)
+                            refs.append(vinculo.get("COD_CTA_REF"))
+                            origens.append(vinculo.get("ORIGEM_MAP"))
 
                 df_res.loc[mask_alvo, "COD_CTA_REF"] = refs
                 df_res.loc[mask_alvo, "ORIGEM_MAP"] = origens
 
         # 4. Limpeza final: ORIGEM_MAP deve ser vazio para contas SINTÉTICAS
+        s_ind_final = cast(pd.Series, df_res["IND_CTA"])
         mask_sintetica = (
-            df_res["IND_CTA"].astype(str).str.upper() != "A" # type: ignore
+            s_ind_final.astype(str).str.upper() != "A"
         )
         df_res.loc[mask_sintetica, "ORIGEM_MAP"] = ""
 
@@ -477,9 +490,29 @@ class ECDProcessor:
             for col in ["VL_SLD_INI_SIG", "VL_DEB", "VL_CRED", "VL_SLD_FIN_SIG"]:
                 balancete_rfb[col] = balancete_rfb[col].round(2)
 
+        # 7. Limpeza e Ordenação Ouro
+        def _finalizar(df: pd.DataFrame) -> pd.DataFrame:
+            if df.empty:
+                return df
+            # Remove colunas técnicas e duplicatas de merges
+            drop_cols = ["PK", "FK_PAI", "CNPJ_x", "CNPJ_y"]
+            d = df.drop(columns=[c for c in drop_cols if c in df.columns]).copy()
+            
+            # Limpeza Ouro: Remove separadores que quebram o CSV
+            obj_cols = d.select_dtypes(include=["object"]).columns
+            d[obj_cols] = d[obj_cols].fillna("").astype(str).replace({";": " ", "\n": " ", "\r": " "}, regex=True)
+            
+            # Garante CNPJ se estiver faltando
+            if "CNPJ" not in d.columns:
+                d["CNPJ"] = self.cnpj
+                
+            # Reordena: DT_FIN e CNPJ primeiro
+            cols = ["DT_FIN", "CNPJ"] + [c for c in d.columns if c not in ["DT_FIN", "CNPJ"]]
+            return d.reindex(columns=cols)
+
         return {
-            "04_Balancetes_Mensais": balancete_empresa,
-            "04_Balancetes_RFB": balancete_rfb,
+            "03_Balancetes_Mensais": _finalizar(balancete_empresa),
+            "04_Balancete_baseRFB": _finalizar(balancete_rfb),
         }
 
     @monitor_task("ECDProcessor", "gerar_balancete_referencial")
@@ -614,7 +647,7 @@ class ECDProcessor:
             df_mes = df_saldos[df_saldos["DT_FIN"] == data].copy()
             tab = pd.merge(
                 df_plano,
-                df_mes[cols_valores + ["COD_CTA"]], # type: ignore
+                df_mes[cols_valores + ["COD_CTA", "CNPJ"]], # type: ignore
                 on="COD_CTA",
                 how="left",
             )
@@ -662,14 +695,25 @@ class ECDProcessor:
 
         res = {"BP": pd.DataFrame(), "DRE": pd.DataFrame()}
         if df_j005 is not None:
-            # Garante que temos a data final para o join
-            base = (
-                df_j005[["PK", "DT_FIN", "CNPJ"]]
-                if "CNPJ" in df_j005.columns
-                else df_j005[["PK", "DT_FIN"]]
-            )
+            # Padrão Ouro: Garante CNPJ vindo do processor caso não esteja no registro J005
+            cols_base = ["PK", "DT_FIN"]
+            base = df_j005[[c for c in cols_base if c in df_j005.columns]].copy()
+            base["CNPJ"] = self.cnpj
+            
+            cols_drop = ["PK_x", "PK_y", "PK", "FK_PAI"] # LINHA_ORIGEM preservada
+
             if df_j100 is not None:
-                res["BP"] = pd.merge(base, df_j100, left_on="PK", right_on="FK_PAI")
+                df_bp = pd.merge(base, df_j100, left_on="PK", right_on="FK_PAI")
+                df_bp.drop(columns=[c for c in cols_drop if c in df_bp.columns], inplace=True)
+                # Reordenamento dinâmico: DT_FIN e CNPJ primeiro, preservando o restante
+                cols_bp = ["DT_FIN", "CNPJ"] + [c for c in df_bp.columns if c not in ["DT_FIN", "CNPJ"]]
+                res["BP"] = df_bp.reindex(columns=cols_bp)
+
             if df_j150 is not None:
-                res["DRE"] = pd.merge(base, df_j150, left_on="PK", right_on="FK_PAI")
+                df_dre = pd.merge(base, df_j150, left_on="PK", right_on="FK_PAI")
+                df_dre.drop(columns=[c for c in cols_drop if c in df_dre.columns], inplace=True)
+                # Reordenamento dinâmico: DT_FIN e CNPJ primeiro, preservando o restante
+                cols_dre = ["DT_FIN", "CNPJ"] + [c for c in df_dre.columns if c not in ["DT_FIN", "CNPJ"]]
+                res["DRE"] = df_dre.reindex(columns=cols_dre)
+
         return res

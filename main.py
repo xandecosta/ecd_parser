@@ -6,15 +6,15 @@ import warnings
 import re
 import shutil
 from typing import Optional, cast, Any, Set, Dict
-import pandas as pd
-from core.reader_ecd import ECDReader
-from core.processor import ECDProcessor
-from core.auditor import ECDAuditor
-from core.telemetry import TelemetryCollector
-from exporters.exporter import ECDExporter
-from exporters.consolidator import ECDConsolidator
-from exporters.audit_exporter import AuditExporter
-from intelligence.historical_mapper import HistoricalMapper
+import pandas as pd # type: ignore
+from core.reader_ecd import ECDReader # type: ignore
+from core.processor import ECDProcessor # type: ignore
+from core.auditor import ECDAuditor # type: ignore
+from core.telemetry import TelemetryCollector # type: ignore
+from exporters.exporter import ECDExporter # type: ignore
+from exporters.consolidator import ECDConsolidator # type: ignore
+from exporters.audit_exporter import AuditExporter # type: ignore
+from intelligence.historical_mapper import HistoricalMapper # type: ignore
 from datetime import datetime, timedelta
 from concurrent.futures import ProcessPoolExecutor, as_completed
 import multiprocessing
@@ -99,7 +99,7 @@ def processar_um_arquivo(
         dict_demos = processor.processar_demonstracoes()
 
         # --- AUDITORIA ---
-        df_bal_mensal = dict_balancetes.get("04_Balancetes_Mensais", pd.DataFrame())
+        df_bal_mensal = dict_balancetes.get("03_Balancetes_Mensais", pd.DataFrame())
         auditor = ECDAuditor(
             df_diario=df_lancamentos,
             df_balancete=df_bal_mensal,
@@ -132,7 +132,7 @@ def processar_um_arquivo(
             "01_BP": dict_demos.get("BP"),
             "02_DRE": dict_demos.get("DRE"),
             "03_Balancetes_Mensais": df_bal_mensal,
-            "04_Balancete_baseRFB": dict_balancetes.get("04_Balancetes_RFB"),
+            "04_Balancete_baseRFB": dict_balancetes.get("04_Balancete_baseRFB"),
             "05_Plano_Contas": df_plano,
             "06_Lancamentos_Contabeis": df_lancamentos,
         }
@@ -242,8 +242,9 @@ def executar_pipeline_batch(telemetry: Optional[TelemetryCollector] = None):
             if not df_i051.empty and not df_i050_norm.empty:
                 df_i051_norm = df_i051.copy()
                 df_i051_norm.columns = df_i051_norm.columns.str.replace("I051_", "", regex=False)
-                df_learn_map = pd.merge(df_i051_norm, df_i050_norm[["PK", "COD_CTA", "COD_CTA_SUP"]], left_on="FK_PAI", right_on="PK", how="inner") # type: ignore
-                df_learn_map.rename(columns={"COD_CTA_SUP": "COD_SUP"}, inplace=True)
+                # Inclui CTA (descrição) no aprendizado histórico
+                df_learn_map = pd.merge(df_i051_norm, df_i050_norm[["PK", "COD_CTA", "COD_CTA_SUP", "CTA"]], left_on="FK_PAI", right_on="PK", how="inner") # type: ignore
+                df_learn_map.rename(columns={"COD_CTA_SUP": "COD_SUP", "CTA": "DESCRICAO"}, inplace=True)
                 if not cod_plan_ref:
                     cod_plan_ref = df_i051_norm.iloc[0].get("COD_PLAN_REF")
 
@@ -263,7 +264,7 @@ def executar_pipeline_batch(telemetry: Optional[TelemetryCollector] = None):
 
     results_data = []
     with ProcessPoolExecutor(max_workers=num_cpus) as executor:
-        futures = {executor.submit(processar_um_arquivo, arq, output_dir, mapper, telemetry): arq for arq in arquivos}
+        futures = {executor.submit(processar_um_arquivo, arq, output_dir, mapper, telemetry): arq for arq in arquivos} # type: ignore
         for future in as_completed(futures):
             try:
                 data = future.result()
@@ -274,7 +275,7 @@ def executar_pipeline_batch(telemetry: Optional[TelemetryCollector] = None):
 
     if telemetry:
         for d in results_data:
-            telemetry.merge(d)
+            telemetry.merge(d) # type: ignore
 
     # Consolidação Final
     consolidator = ECDConsolidator(output_dir)
@@ -318,17 +319,18 @@ def gerar_relatorio_final(telemetry: TelemetryCollector, start_time: float, elap
                 f.write("-" * 100 + "\n")
 
                 # Métricas de Componentes
-                all_comps = {}
+                all_comps: Dict[str, Set[str]] = {}
                 for ecd in ecds:
                     for comp, meths in telemetry.data[ecd].get("metrics", {}).items():
-                        if comp not in all_comps:
-                            all_comps[comp] = set()
+                        c_str = str(comp)
+                        if c_str not in all_comps:
+                            all_comps[c_str] = set()
                         for meth in meths.keys():
-                            all_comps[comp].add(meth)
+                            all_comps[c_str].add(str(meth)) # type: ignore
 
-                grand_total_all = 0.0
+                grand_total_all: float = 0.0
                 for comp in sorted(all_comps.keys()):
-                    comp_total_row = 0.0
+                    comp_total_row: float = 0.0
                     row_comp = f"{comp} (Subtotal)".ljust(30) + " | "
                     for ecd in ecds:
                         val = sum(telemetry.data[ecd]["metrics"].get(comp, {}).values())
@@ -336,16 +338,16 @@ def gerar_relatorio_final(telemetry: TelemetryCollector, start_time: float, elap
                         comp_total_row += val
                     f.write(row_comp + f"{comp_total_row:.2f}s\n")
                     
-                    for meth in sorted(all_comps[comp]):
+                    for meth in sorted(all_comps[comp]): # type: ignore
                         row_meth = f"  - {meth.ljust(26)} | "
-                        meth_total_row = 0.0
+                        meth_total_row: float = 0.0
                         for ecd in ecds:
                             val = telemetry.data[ecd]["metrics"].get(comp, {}).get(meth, 0.0)
                             row_meth += f"{(f'{val:.2f}s').ljust(13)} | "
                             meth_total_row += val
                         f.write(row_meth + f"{meth_total_row:.2f}s\n")
                     f.write(" " * 30 + " | " + " " * 15 * len(ecds) + " | \n")
-                    grand_total_all += comp_total_row
+                    grand_total_all = grand_total_all + comp_total_row # type: ignore
 
                 f.write("-" * 100 + "\n")
                 # Linha de Término
@@ -378,7 +380,7 @@ def gerar_relatorio_final(telemetry: TelemetryCollector, start_time: float, elap
                 f.write(f"{comp}\n")
                 for meth, dur in meths.items():
                     f.write(f"  - {meth.ljust(46)} | {dur:.2f}s\n")
-                    global_total += dur
+                    global_total = global_total + float(dur) # type: ignore
             f.write("-" * 100 + "\n")
             f.write(f"{'TOTAL PROCESSOS GLOBAIS'.ljust(50)} | {global_total:.2f}s\n\n")
 

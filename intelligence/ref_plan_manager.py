@@ -1,9 +1,9 @@
-import pandas as pd
+import pandas as pd # type: ignore
 import os
 import shutil
 import json
 import re
-from typing import Dict, List, Any
+from typing import Dict, List, Any, cast
 
 # Mapeamento Estático O(1) de Tabelas para Códigos fora da inicialização
 TABLE_TO_COD_REF = {
@@ -301,7 +301,8 @@ class RefPlanManager:
             info_versao = ""
             layout_type = "ref_standard"
 
-            for _, row in group.iterrows():
+            group_df = cast(pd.DataFrame, group)
+            for _, row in group_df.iterrows():
                 file_name = str(row["TabelaDinamica"])
                 versao = str(row["VersaoTabDinamica"])
                 estrutura = str(row["ESTRUTURA_COLUNAS"])
@@ -351,8 +352,8 @@ class RefPlanManager:
                 self.filtered_meta_path, sep=";", encoding="utf-8-sig", dtype=str
             )
 
-        unique_refs = [
-            r for r in df_meta["COD_PLAN_REF"].unique()
+        unique_refs: List[str] = [
+            str(r) for r in df_meta["COD_PLAN_REF"].unique()
             if str(r).strip() in ["1", "2"]
         ]
         print(f"Processing restricted to COD_PLAN_REF types: {unique_refs}")
@@ -440,7 +441,7 @@ class RefPlanManager:
         # Detect conflicts for each column
         for col in cols_check:
             # Shifted must not be null (e.g. first appearance) and not empty
-            mask_conflict = (df_all[col] != df_shifted[col]) & df_shifted[col].notna() & (df_shifted[col] != "")
+            mask_conflict = cast(Any, (df_all[col] != df_shifted[col]) & df_shifted[col].notna() & (df_shifted[col] != ""))
 
             if mask_conflict.any():
                 conflict_rows = df_all[mask_conflict]

@@ -1521,12 +1521,6 @@
         "decimal": 0
       },
       {
-        "nome": "J150_NU_ORDEM",
-        "tipo": "N",
-        "tamanho": 19,
-        "decimal": 0
-      },
-      {
         "nome": "J150_COD_AGL",
         "tipo": "C",
         "tamanho": 0,
@@ -1557,18 +1551,6 @@
         "decimal": 0
       },
       {
-        "nome": "J150_VL_CTA_INI",
-        "tipo": "N",
-        "tamanho": 19,
-        "decimal": 2
-      },
-      {
-        "nome": "J150_IND_DC_CTA_INI",
-        "tipo": "C",
-        "tamanho": 1,
-        "decimal": 0
-      },
-      {
         "nome": "J150_VL_CTA_FIN",
         "tipo": "N",
         "tamanho": 19,
@@ -1581,7 +1563,7 @@
         "decimal": 0
       },
       {
-        "nome": "J150_IND_GRP_DRE",
+        "nome": "J150_IND_GRP_DRE_FIN",
         "tipo": "C",
         "tamanho": 1,
         "decimal": 0

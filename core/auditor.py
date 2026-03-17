@@ -1,7 +1,7 @@
-import pandas as pd
+import pandas as pd # type: ignore # type: ignore
 import logging
 from typing import Dict, Any, List, Optional, cast
-from core.telemetry import monitor_task, TelemetryCollector
+from core.telemetry import monitor_task, TelemetryCollector # type: ignore
 # Auditoria Forense Digital
 
 
@@ -123,7 +123,7 @@ class ECDAuditor:
             on=["COD_CTA", "PERIODO"],
             how="outer",
             suffixes=("_DIARIO", "_RAZAO"),
-        ).fillna(0.0)
+        ).fillna(0.0) # type: ignore
 
         # Cálculo das Divergências
         df_conf["DIF_DEB"] = df_conf.apply(lambda x: x["VL_D"] - x["VL_DEB"], axis=1)
@@ -203,11 +203,9 @@ class ECDAuditor:
             )
 
         # Garante integridade de tipos
-        df_b["NIVEL"] = (
-            pd.to_numeric(df_b["NIVEL"], errors="coerce")
-            .fillna(0)
-            .astype(int)
-        )
+        if "NIVEL" in df_b.columns:
+            s_nivel = pd.to_numeric(df_b["NIVEL"], errors="coerce")
+            df_b["NIVEL"] = s_nivel.fillna(0).astype(int) # type: ignore
 
         # Isola contas Analíticas (assumindo que o Processor já calculou os sintéticos,
         # mas queremos testar se a MATEMÁTICA bate, caso o processor tenha propagado erro ou o input seja ruim)
@@ -253,7 +251,7 @@ class ECDAuditor:
 
             # Calculate sum of all children for each parent
             df_filhos_agregados = df_mes.groupby("COD_CTA_SUP", as_index=False)["VL_SLD_FIN_SIG"].sum()
-            df_filhos_agregados.rename(columns={"VL_SLD_FIN_SIG": "VL_CALCULADO", "COD_CTA_SUP": "COD_CTA"}, inplace=True)
+            df_filhos_agregados = df_filhos_agregados.rename(columns={"VL_SLD_FIN_SIG": "VL_CALCULADO", "COD_CTA_SUP": "COD_CTA"})
             
             # Merge with synthetics
             df_compare = pd.merge(df_sint, df_filhos_agregados, on="COD_CTA", how="left")
@@ -339,7 +337,7 @@ class ECDAuditor:
         if "COD_CTA_REF" not in df_check.columns:
             if self.df_mapeamento is not None:
                 # Blindagem p/ IDE: garante que self.df_mapeamento é DataFrame
-                tab_i051 = self.df_mapeamento.copy()
+                tab_i051 = cast(pd.DataFrame, self.df_mapeamento).copy()
                 # Normalização pode ser necessária se I051 tiver prefixos
                 df_map_temp = tab_i051.copy()
                 if "I051_COD_CTA_REF" in df_map_temp.columns:

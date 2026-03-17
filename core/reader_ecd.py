@@ -26,10 +26,11 @@ class ECDReader:
     @property
     def ano_vigencia(self) -> Optional[int]:
         """Extrai o ano do periodo_ecd (YYYYMMDD)."""
-        if self.periodo_ecd and len(self.periodo_ecd) >= 4:
+        if self.periodo_ecd and len(str(self.periodo_ecd)) >= 4:
             try:
-                return int(self.periodo_ecd[:4])
-            except ValueError:
+                s_periodo = str(self.periodo_ecd)
+                return int(s_periodo[0:4])
+            except (ValueError, TypeError):
                 return None
         return None
 
@@ -239,8 +240,9 @@ class ECDReader:
                         and len(dt_fin) == 8
                         and dt_fin.isdigit()
                     ):
-                        # Converte DDMMYYYY para YYYYMMDD se necessário (o reader_ecd costuma converter para date, mas o fallback é bom)
-                        self.periodo_ecd = f"{dt_fin[4:]}{dt_fin[2:4]}{dt_fin[:2]}"
+                        s_dt = str(dt_fin)
+                        # Converte DDMMYYYY para YYYYMMDD se necessário
+                        self.periodo_ecd = f"{s_dt[4:8]}{s_dt[2:4]}{s_dt[0:2]}"
                     else:
                         # Fallback crítico: se não houver data válida
                         self.periodo_ecd = "00000000"
@@ -249,8 +251,8 @@ class ECDReader:
                     self.cnpj = str(
                         dados_registro.get("0000_CNPJ")
                         or dados_registro.get("CNPJ")
-                        or ""
-                    )
+                        or self.cnpj
+                    ).strip()
 
                 # --- Geração de PK ---
                 pk_prefix = self.periodo_ecd if self.periodo_ecd else "00000000"

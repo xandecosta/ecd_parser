@@ -87,10 +87,10 @@ Este processo ignora a omissão do arquivo atual e busca a verdade nos anos adja
 
 ## 4. Pontos de Melhoria e Evoluções
 
-### 4.1 Memória Persistente (Banco de Dados de Conhecimento)
+### 4.1 Memória Persistente (Banco de Dados de Conhecimento) - IMPLEMENTADO
 
-Atualmente, o `HistoricalMapper` opera em memória volátil, perdendo seu aprendizado ao final de cada execução do `main.py`.
+O `HistoricalMapper` agora utiliza persistência em arquivo JSON para manter seu aprendizado entre execuções.
 
-- **Objetivo**: Implementar a persistência do conhecimento em um banco de dados (ex: SQLite ou arquivos Parquet de histórico).
-- **Benefício**: Resolverá o problema de "Arquivos Órfãos". Se um arquivo problemático for processado sozinho, o sistema poderá consultar mapeamentos validados em execuções de meses ou anos anteriores, mesmo que os arquivos originais não estejam mais na pasta de entrada.
-- **Fluxo**: Ao iniciar o aprendizado, o sistema carrega o "Cérebro Master" e, ao final, salva as novas descobertas.
+- **Status**: Ativo via `data/intelligence/history.json`.
+- **Benefício**: Resolve o problema de "Arquivos Órfãos". Se um arquivo problemático for processado sozinho, o sistema consulta mapeamentos validados em execuções anteriores.
+- **Fluxo**: O sistema carrega o `history.json` no início, integra novos dados e salva a versão atualizada ao final.
