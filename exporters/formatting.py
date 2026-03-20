@@ -42,3 +42,37 @@ def apply_region_format(df: pd.DataFrame) -> pd.DataFrame:
                 )
 
     return df_out
+
+
+# Prefixos de colunas que devem ser tratadas como valores numéricos
+_VL_PREFIXES = ("VL_", "DIF_", "VLR_")
+
+
+def ensure_numeric_vl_cols(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Converte colunas cujo nome começa com prefixos de valor (VL_, DIF_, VLR_)
+    para float64, normalizando strings com vírgula decimal antes da conversão.
+
+    Deve ser chamado ANTES de to_csv() para garantir que o parâmetro
+    decimal="," do pandas funcione corretamente com dados vindos do parser
+    SPED, onde valores numéricos chegam como strings (ex: "1234.56" ou "1234,56").
+
+    Os arquivos Parquet NÃO devem passar por esta função — ela é exclusiva
+    para a camada de exportação CSV.
+    """
+    if df.empty:
+        return df
+
+    df_out = df.copy()
+    for col in df_out.columns:
+        if str(col).upper().startswith(_VL_PREFIXES):
+            if not pd.api.types.is_numeric_dtype(df_out[col]):
+                # Normaliza separador decimal antes da conversão (vírgula → ponto)
+                df_out[col] = (
+                    df_out[col]
+                    .astype(str)
+                    .str.replace(",", ".", regex=False)
+                    .pipe(lambda s: pd.to_numeric(s, errors="coerce"))
+                    .fillna(0.0)
+                )
+    return df_out

@@ -6,15 +6,15 @@ import warnings
 import re
 import shutil
 from typing import Optional, cast, Any, Set, Dict
-import pandas as pd # type: ignore
-from core.reader_ecd import ECDReader # type: ignore
-from core.processor import ECDProcessor # type: ignore
-from core.auditor import ECDAuditor # type: ignore
-from core.telemetry import TelemetryCollector # type: ignore
-from exporters.exporter import ECDExporter # type: ignore
-from exporters.consolidator import ECDConsolidator # type: ignore
-from exporters.audit_exporter import AuditExporter # type: ignore
-from intelligence.historical_mapper import HistoricalMapper # type: ignore
+import pandas as pd
+from core.reader_ecd import ECDReader
+from core.processor import ECDProcessor
+from core.auditor import ECDAuditor
+from core.telemetry import TelemetryCollector
+from exporters.exporter import ECDExporter
+from exporters.consolidator import ECDConsolidator
+from exporters.audit_exporter import AuditExporter
+from intelligence.historical_mapper import HistoricalMapper
 from datetime import datetime, timedelta
 from concurrent.futures import ProcessPoolExecutor, as_completed
 import multiprocessing
@@ -36,7 +36,7 @@ warnings.filterwarnings("ignore")
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
-    handlers=[logging.StreamHandler(sys.stdout)]
+    handlers=[logging.StreamHandler(sys.stdout)],
 )
 logging.getLogger("core.reader_ecd").setLevel(logging.WARNING)
 logging.getLogger("core.processor").setLevel(logging.WARNING)
@@ -55,7 +55,7 @@ def processar_um_arquivo(
 
     try:
         reader = ECDReader(caminho_arquivo)
-        
+
         # Extração de ID do Folder (Período)
         match = re.search(r"(\d{8})-(\d{8})-", nome_arquivo)
         id_folder_temp = match.group(1) if match else nome_projeto
@@ -110,7 +110,7 @@ def processar_um_arquivo(
         if telemetry:
             auditor.telemetry = telemetry
             auditor.current_ecd_id = id_folder
-        
+
         resultados_audit = auditor.executar_auditoria_completa()
 
         # --- EXPORTAÇÃO ---
@@ -123,8 +123,12 @@ def processar_um_arquivo(
         itens_log = []
         try:
             audit_exporter = AuditExporter(pasta_saida)
-            itens_log += audit_exporter.exportar_dashboard(resultados_audit, nome_projeto, prefixo=id_folder)
-            itens_log += audit_exporter.exportar_detalhes_parquet(resultados_audit, prefixo=id_folder)
+            itens_log += audit_exporter.exportar_dashboard(
+                resultados_audit, nome_projeto, prefixo=id_folder
+            )
+            itens_log += audit_exporter.exportar_detalhes_parquet(
+                resultados_audit, prefixo=id_folder
+            )
         except Exception as e:
             logging.error(f"Erro na exportação de auditoria ({id_folder}): {e}")
 
@@ -136,12 +140,18 @@ def processar_um_arquivo(
             "05_Plano_Contas": df_plano,
             "06_Lancamentos_Contabeis": df_lancamentos,
         }
-        
-        exporter.exportar_lote(tabelas, nome_projeto, prefixo=id_folder, itens_adicionais=itens_log, tempo_inicio=start_proc)
+
+        exporter.exportar_lote(
+            tabelas,
+            nome_projeto,
+            prefixo=id_folder,
+            itens_adicionais=itens_log,
+            tempo_inicio=start_proc,
+        )
 
         if telemetry:
             telemetry.end_ecd(id_folder)
-        
+
         logging.info(f"Sucesso: {id_folder}")
         return telemetry.data if telemetry else {}
 
@@ -169,11 +179,12 @@ def executar_pipeline_batch(telemetry: Optional[TelemetryCollector] = None):
         print("Nenhum arquivo .txt encontrado na pasta data/input.")
         return
 
-    logging.info("Limpando pasta de saída (mantendo logs)...")
+    logging.info("Limpando pasta de saída (mantendo logs e consolidado)...")
+    pastas_preservar = {"file_logs", "consolidado"}
     for item in os.listdir(output_dir):
-        if item == "file_logs":
+        if item in pastas_preservar:
             continue
-            
+
         caminho_item = os.path.join(output_dir, item)
         try:
             if os.path.isdir(caminho_item):
@@ -181,7 +192,9 @@ def executar_pipeline_batch(telemetry: Optional[TelemetryCollector] = None):
             else:
                 os.remove(caminho_item)
         except OSError as e:
-            logging.warning(f"Não foi possível remover {item}: {e}. Certifique-se de que pastas/arquivos não estejam abertos.")
+            logging.warning(
+                f"Não foi possível remover {item}: {e}. Certifique-se de que pastas/arquivos não estejam abertos."
+            )
 
     # Garante que a pasta de log existe
     os.makedirs(os.path.join(output_dir, "file_logs"), exist_ok=True)
@@ -200,7 +213,9 @@ def executar_pipeline_batch(telemetry: Optional[TelemetryCollector] = None):
     history_file = os.path.join(intelligence_dir, "history.json")
 
     if os.path.exists(history_file):
-        logging.info(f"Carregando conhecimento prévio: {os.path.basename(history_file)}")
+        logging.info(
+            f"Carregando conhecimento prévio: {os.path.basename(history_file)}"
+        )
         mapper.load_knowledge(history_file)
 
     for arquivo in arquivos:
@@ -213,43 +228,68 @@ def executar_pipeline_batch(telemetry: Optional[TelemetryCollector] = None):
             reader = ECDReader(arquivo)
             # APRENDIZADO CIRÚRGICO: Pede apenas Blocos 0, I e J (ignora K, L e os pesados lançamentos I200/I250)
             # Isso reduz consumo de RAM em até 95% para arquivos grandes
-            regs_interesse = list(reader.processar_arquivo(blocos_selecionados=["0", "I", "J"]))
+            regs_interesse = list(
+                reader.processar_arquivo(blocos_selecionados=["0", "I", "J"])
+            )
             if not regs_interesse:
                 continue
 
             df_all = pd.DataFrame(regs_interesse)
-            
+
             # Extração de Metadados RFB e Mapeamentos (Mesma lógica, agora sobre dados filtrados)
             cod_plan_ref = None
             df_0000 = df_all[df_all["REG"] == "0000"]
             if not df_0000.empty:
                 df_0000_norm = df_0000.copy()
-                df_0000_norm.columns = df_0000_norm.columns.str.replace("0000_", "", regex=False)
+                df_0000_norm.columns = df_0000_norm.columns.str.replace(
+                    "0000_", "", regex=False
+                )
                 cod_plan_ref = df_0000_norm.iloc[0].get("COD_PLAN_REF")
 
             df_i050 = df_all[df_all["REG"] == "I050"]
             df_i050_norm = pd.DataFrame()
             accounting_ctas: Set[str] = set()
-            
+
             if not df_i050.empty:
                 df_i050_norm = df_i050.copy()
-                df_i050_norm.columns = df_i050_norm.columns.str.replace("I050_", "", regex=False)
+                df_i050_norm.columns = df_i050_norm.columns.str.replace(
+                    "I050_", "", regex=False
+                )
                 if "COD_CTA" in df_i050_norm.columns:
-                    accounting_ctas = set(df_i050_norm["COD_CTA"].dropna().astype(str).str.strip()) # type: ignore
+                    accounting_ctas = set(
+                        df_i050_norm["COD_CTA"].dropna().astype(str).str.strip()
+                    )  # type: ignore
 
             df_i051 = df_all[df_all["REG"] == "I051"]
             df_learn_map = pd.DataFrame()
             if not df_i051.empty and not df_i050_norm.empty:
                 df_i051_norm = df_i051.copy()
-                df_i051_norm.columns = df_i051_norm.columns.str.replace("I051_", "", regex=False)
+                df_i051_norm.columns = df_i051_norm.columns.str.replace(
+                    "I051_", "", regex=False
+                )
                 # Inclui CTA (descrição) no aprendizado histórico
-                df_learn_map = pd.merge(df_i051_norm, df_i050_norm[["PK", "COD_CTA", "COD_CTA_SUP", "CTA"]], left_on="FK_PAI", right_on="PK", how="inner") # type: ignore
-                df_learn_map.rename(columns={"COD_CTA_SUP": "COD_SUP", "CTA": "DESCRICAO"}, inplace=True)
+                df_learn_map = pd.merge(
+                    df_i051_norm,
+                    df_i050_norm[["PK", "COD_CTA", "COD_CTA_SUP", "CTA"]],
+                    left_on="FK_PAI",
+                    right_on="PK",
+                    how="inner",
+                )  # type: ignore
+                df_learn_map.rename(
+                    columns={"COD_CTA_SUP": "COD_SUP", "CTA": "DESCRICAO"}, inplace=True
+                )
                 if not cod_plan_ref:
                     cod_plan_ref = df_i051_norm.iloc[0].get("COD_PLAN_REF")
 
             if not df_learn_map.empty or cod_plan_ref or accounting_ctas:
-                mapper.learn(reader.cnpj or "", str(reader.ano_vigencia or ""), df_learn_map, cod_plan_ref=str(cod_plan_ref) if cod_plan_ref else None, accounting_ctas=accounting_ctas, file_id=nome_arq)
+                mapper.learn(
+                    reader.cnpj or "",
+                    str(reader.ano_vigencia or ""),
+                    df_learn_map,
+                    cod_plan_ref=str(cod_plan_ref) if cod_plan_ref else None,
+                    accounting_ctas=accounting_ctas,
+                    file_id=nome_arq,
+                )
 
         except Exception as e:
             logging.warning(f"Falha no aprendizado de {nome_arq}: {e}")
@@ -259,12 +299,19 @@ def executar_pipeline_batch(telemetry: Optional[TelemetryCollector] = None):
     logging.info("Consenso histórico persistido.")
 
     # --- EXECUÇÃO PARALELA (Otimização Ouro) ---
-    num_cpus = max(1, multiprocessing.cpu_count() - 1) # Deixa 1 núcleo livre para o SO
-    logging.info(f"Iniciando auditoria paralela em {len(arquivos)} arquivos ({num_cpus} núcleos)...")
+    num_cpus = max(1, multiprocessing.cpu_count() - 1)  # Deixa 1 núcleo livre para o SO
+    logging.info(
+        f"Iniciando auditoria paralela em {len(arquivos)} arquivos ({num_cpus} núcleos)..."
+    )
 
     results_data = []
     with ProcessPoolExecutor(max_workers=num_cpus) as executor:
-        futures = {executor.submit(processar_um_arquivo, arq, output_dir, mapper, telemetry): arq for arq in arquivos} # type: ignore
+        futures = {
+            executor.submit(
+                processar_um_arquivo, arq, output_dir, mapper, telemetry
+            ): arq
+            for arq in arquivos
+        }  # type: ignore
         for future in as_completed(futures):
             try:
                 data = future.result()
@@ -275,7 +322,7 @@ def executar_pipeline_batch(telemetry: Optional[TelemetryCollector] = None):
 
     if telemetry:
         for d in results_data:
-            telemetry.merge(d) # type: ignore
+            telemetry.merge(d)  # type: ignore
 
     # Consolidação Final
     consolidator = ECDConsolidator(output_dir)
@@ -285,9 +332,13 @@ def executar_pipeline_batch(telemetry: Optional[TelemetryCollector] = None):
     consolidator.consolidar()
 
 
-def gerar_relatorio_final(telemetry: TelemetryCollector, start_time: float, elapsed: float):
+def gerar_relatorio_final(
+    telemetry: TelemetryCollector, start_time: float, elapsed: float
+):
     """Gera o log tabular de execução e telemetria forense completa."""
-    log_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "output", "file_logs")
+    log_dir = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "data", "output", "file_logs"
+    )
     os.makedirs(log_dir, exist_ok=True)
     hist_file = os.path.join(log_dir, "execution_history.log")
     end_time = start_time + elapsed
@@ -313,7 +364,9 @@ def gerar_relatorio_final(telemetry: TelemetryCollector, start_time: float, elap
                 # Linha de Início
                 row_inicio = f"{'INÍCIO PROCESSAMENTO'.ljust(30)} | "
                 for ecd in ecds:
-                    ts = datetime.fromtimestamp(telemetry.data[ecd]["inicio"]).strftime("%H:%M:%S")
+                    ts = datetime.fromtimestamp(telemetry.data[ecd]["inicio"]).strftime(
+                        "%H:%M:%S"
+                    )
                     row_inicio += f"{ts.ljust(13)} | "
                 f.write(row_inicio + " ---\n")
                 f.write("-" * 100 + "\n")
@@ -326,7 +379,7 @@ def gerar_relatorio_final(telemetry: TelemetryCollector, start_time: float, elap
                         if c_str not in all_comps:
                             all_comps[c_str] = set()
                         for meth in meths.keys():
-                            all_comps[c_str].add(str(meth)) # type: ignore
+                            all_comps[c_str].add(str(meth))  # type: ignore
 
                 grand_total_all: float = 0.0
                 for comp in sorted(all_comps.keys()):
@@ -337,24 +390,32 @@ def gerar_relatorio_final(telemetry: TelemetryCollector, start_time: float, elap
                         row_comp += f"{(f'{val:.2f}s').ljust(13)} | "
                         comp_total_row += val
                     f.write(row_comp + f"{comp_total_row:.2f}s\n")
-                    
-                    for meth in sorted(all_comps[comp]): # type: ignore
+
+                    for meth in sorted(all_comps[comp]):  # type: ignore
                         row_meth = f"  - {meth.ljust(26)} | "
                         meth_total_row: float = 0.0
                         for ecd in ecds:
-                            val = telemetry.data[ecd]["metrics"].get(comp, {}).get(meth, 0.0)
+                            val = (
+                                telemetry.data[ecd]["metrics"]
+                                .get(comp, {})
+                                .get(meth, 0.0)
+                            )
                             row_meth += f"{(f'{val:.2f}s').ljust(13)} | "
                             meth_total_row += val
                         f.write(row_meth + f"{meth_total_row:.2f}s\n")
                     f.write(" " * 30 + " | " + " " * 15 * len(ecds) + " | \n")
-                    grand_total_all = grand_total_all + comp_total_row # type: ignore
+                    grand_total_all = grand_total_all + comp_total_row  # type: ignore
 
                 f.write("-" * 100 + "\n")
                 # Linha de Término
                 row_fim = f"{'TÉRMINO PROCESSAMENTO'.ljust(30)} | "
                 for ecd in ecds:
                     term = telemetry.data[ecd].get("termino")
-                    ts = datetime.fromtimestamp(term).strftime("%H:%M:%S") if term else "N/A"
+                    ts = (
+                        datetime.fromtimestamp(term).strftime("%H:%M:%S")
+                        if term
+                        else "N/A"
+                    )
                     row_fim += f"{ts.ljust(13)} | "
                 f.write(row_fim + " ---\n")
 
@@ -373,27 +434,34 @@ def gerar_relatorio_final(telemetry: TelemetryCollector, start_time: float, elap
             # II. TELEMETRIA DE PROCESSOS GLOBAIS
             f.write("II. TELEMETRIA DE PROCESSOS GLOBAIS (Pós-Processamento)\n")
             f.write("-" * 100 + "\n")
-            f.write(f"{'COMPONENTE / MÉTODO'.ljust(50)} | {'DURAÇÃO EXATA'.ljust(20)}\n")
+            f.write(
+                f"{'COMPONENTE / MÉTODO'.ljust(50)} | {'DURAÇÃO EXATA'.ljust(20)}\n"
+            )
             f.write("-" * 100 + "\n")
             global_total = 0.0
             for comp, meths in telemetry.global_stats.items():
                 f.write(f"{comp}\n")
                 for meth, dur in meths.items():
                     f.write(f"  - {meth.ljust(46)} | {dur:.2f}s\n")
-                    global_total = global_total + float(dur) # type: ignore
+                    global_total = global_total + float(dur)  # type: ignore
             f.write("-" * 100 + "\n")
             f.write(f"{'TOTAL PROCESSOS GLOBAIS'.ljust(50)} | {global_total:.2f}s\n\n")
 
             # III. RESUMO FINAL DA ANÁLISE
             f.write("III. RESUMO FINAL DA ANÁLISE\n")
             f.write("-" * 100 + "\n")
-            f.write(f"- INÍCIO DA ANÁLISE:   {datetime.fromtimestamp(start_time).strftime('%Y-%m-%d %H:%M:%S')}\n")
-            f.write(f"- FINAL DA ANÁLISE:    {datetime.fromtimestamp(end_time).strftime('%Y-%m-%d %H:%M:%S')}\n")
+            f.write(
+                f"- INÍCIO DA ANÁLISE:   {datetime.fromtimestamp(start_time).strftime('%Y-%m-%d %H:%M:%S')}\n"
+            )
+            f.write(
+                f"- FINAL DA ANÁLISE:    {datetime.fromtimestamp(end_time).strftime('%Y-%m-%d %H:%M:%S')}\n"
+            )
             f.write(f"- DURAÇÃO DA EXECUÇÃO: {str(timedelta(seconds=int(elapsed)))}\n")
             f.write("=" * 100 + "\n")
 
     except Exception as e:
         print(f"Erro ao gravar log de telemetria: {e}")
+
 
 if __name__ == "__main__":
     start_time = time.time()

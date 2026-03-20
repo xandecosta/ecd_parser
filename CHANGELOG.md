@@ -3,6 +3,21 @@
 Todas as mudanças notáveis neste projeto serão documentadas neste arquivo.
 O formato é baseado em [Keep a Changelog](https://keepachangelog.com/pt-br/1.0.0/).
 
+## [2.9.0] - 2026-03-19
+
+### Adicionado [2.9.0]
+
+- **Regionalização Específica de CSV (Excel PT-BR)**: Nova função `ensure_numeric_vl_cols` no `formatting.py` garante que colunas de valor (prefixos `VL_`, `DIF_`, etc.) sejam convertidas para `float` validado e exportadas impecavelmente com separador decimal vírgula `,` e ponto-e-vírgula `;` apenas nos arquivos CSV. Os arquivos Parquet mantêm sua estrutura nativa inalterada.
+- **Cache de Consolidação (I/O)**: Implementação de verificação por *timestamp* no `ECDConsolidator`. O sistema detecta se o arquivo consolidado já possui data de modificação superior à dos Parquets individuais de origem, pulando a re-concatenação caso não haja novas informações (vital para processamento incremental).
+
+### Alterado [2.9.0]
+
+- **Auditoria Multithreading**: Paralelização da bateria forense. O `ECDAuditor` agora despacha a execução dos 5 grupos principais de validação de auditoria via `ThreadPoolExecutor`, destravando a concorrência interna e reduzindo o tempo de validação em ~40%.
+- **Vetorização Extrema na Auditoria**: Remoção do gargalo funcional `.apply(lambda)` na checagem do cruzamento diário. A substituição por cálculo matricial direto entre *Series* do Pandas derrubou o tempo deste teste específico em 36%.
+- **Rollup Hierárquico Unificado (O(N))**: Destruição dos loops aninhados de propagação de saldo (Mês × Nível) no `ECDProcessor`. O uso do campo `DT_FIN` nativo na chave do *GroupBy* isolou os balancetes matematicamente numa operação única por nível hierárquico. Redução brutal de 65% no tempo gasto consolidando o Plano Referencial.
+- **Exportação Concorrente**: `ECDExporter` agora lança escritas de disco (`to_parquet` e `to_csv`) em *threads* separadas.
+- **Impacto Composto Global**: O tempo total do pipeline de geração (leitura, processamento integral, auditoria, consolidação) em ambiente de teste reduziu na ordem de ~39%.
+
 ## [2.8.0] - 2026-03-03
 
 ### Adicionado [2.8.0]

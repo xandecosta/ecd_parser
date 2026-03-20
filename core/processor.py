@@ -1,8 +1,8 @@
 import os
 import json
-import pandas as pd # type: ignore
+import pandas as pd
 import logging
-import numpy as np # type: ignore
+import numpy as np
 
 from typing import Dict, List, Any, Optional, cast
 from core.telemetry import monitor_task, TelemetryCollector
@@ -135,12 +135,14 @@ class ECDProcessor:
                 df_reg.drop(columns=["REG"], inplace=True)
 
             prefixo = f"{reg}_"
-            df_reg = df_reg.rename(columns=lambda c: str(c).removeprefix(prefixo) if str(c).startswith(prefixo) else c)
+            df_reg = df_reg.rename(
+                columns=lambda c: (
+                    str(c).removeprefix(prefixo) if str(c).startswith(prefixo) else c
+                )
+            )
 
             # Remove duplicatas de colunas que possam surgir na renomeação
-            self.blocos[f"dfECD_{reg}"] = df_reg.loc[
-                :, ~df_reg.columns.duplicated()
-            ]
+            self.blocos[f"dfECD_{reg}"] = df_reg.loc[:, ~df_reg.columns.duplicated()]
 
     @monitor_task("ECDProcessor", "_identificar_metadados_referenciais")
     def _identificar_metadados_referenciais(self) -> None:
@@ -152,7 +154,7 @@ class ECDProcessor:
         # 1. Identificação do Ano (DT_FIN) - Comum a todas as versões
         val_0000 = df_0000.iloc[0]
         dt_fin = val_0000.get("DT_FIN")
-        
+
         try:
             if isinstance(dt_fin, pd.Timestamp) or hasattr(dt_fin, "year"):
                 self.ano_vigencia = int(getattr(dt_fin, "year"))
@@ -176,14 +178,18 @@ class ECDProcessor:
 
         # 2. Identificação do COD_PLAN_REF (Condicional por Versão)
         try:
-            versao_num = float(str(self.layout_versao).replace(",", ".")) if self.layout_versao else 0.0
+            versao_num = (
+                float(str(self.layout_versao).replace(",", "."))
+                if self.layout_versao
+                else 0.0
+            )
         except ValueError:
             versao_num = 0.0
 
         if versao_num >= 8.0:
             # Moderno: Está no 0000
             df_ref = cast(pd.DataFrame, df_0000)
-            self.cod_plan_ref = str(df_ref.iloc[0].get("COD_PLAN_REF", "")) # type: ignore
+            self.cod_plan_ref = str(df_ref.iloc[0].get("COD_PLAN_REF", ""))
         else:
             # Legado: Está no primeiro I051
             df_i051 = self.blocos.get("dfECD_I051")
@@ -228,7 +234,7 @@ class ECDProcessor:
     @staticmethod
     def _series_to_float(s: Any) -> pd.Series:
         """Converte uma Series inteira para float64 vetorialmente (sem .apply)."""
-        return pd.to_numeric(s, errors="coerce").fillna(0.0) # type: ignore
+        return pd.to_numeric(s, errors="coerce").fillna(0.0)
 
     @monitor_task("ECDProcessor", "processar_plano_contas")
     def processar_plano_contas(self) -> pd.DataFrame:
@@ -288,13 +294,9 @@ class ECDProcessor:
         # 3. Executamos a Inferência Histórica apenas para as lacunas remanescentes
         if self.knowledge_base is not None:
             s_ref = cast(pd.Series, df_res["COD_CTA_REF"])
-            mask_vazio = s_ref.isna() | (
-                s_ref.astype(str).str.strip() == ""
-            )
+            mask_vazio = s_ref.isna() | (s_ref.astype(str).str.strip() == "")
             s_ind = cast(pd.Series, df_res["IND_CTA"])
-            mask_analitica = (
-                s_ind.astype(str).str.upper() == "A"
-            )
+            mask_analitica = s_ind.astype(str).str.upper() == "A"
             mask_alvo = mask_vazio & mask_analitica
 
             if mask_alvo.any():
@@ -303,19 +305,25 @@ class ECDProcessor:
                 # OTIMIZAÇÃO VETORIAL OURO: Zipping lists >> DataFrame.apply()
                 cod_ctas = df_res.loc[mask_alvo, "COD_CTA"].astype(str).tolist()
                 cod_sups = df_res.loc[mask_alvo, "COD_CTA_SUP"].astype(str).tolist()
-                descs = df_res.loc[mask_alvo, "CTA"].astype(str).tolist() if "CTA" in df_res.columns else [None] * len(cod_ctas)
-                
+                descs = (
+                    df_res.loc[mask_alvo, "CTA"].astype(str).tolist()
+                    if "CTA" in df_res.columns
+                    else [None] * len(cod_ctas)
+                )
+
                 refs = []
                 origens = []
                 kb = self.knowledge_base
-                
+
                 if kb is not None and hasattr(kb, "get_mapping"):
                     for cta, sup, desc in zip(cod_ctas, cod_sups, descs):
                         if not cta:
                             refs.append(None)
                             origens.append("SEM_COD_CTA")
                         else:
-                            vinculo = kb.get_mapping(self.cnpj, cta, ano_str, cod_sup=sup, descricao=desc)
+                            vinculo = kb.get_mapping(
+                                self.cnpj, cta, ano_str, cod_sup=sup, descricao=desc
+                            )
                             refs.append(vinculo.get("COD_CTA_REF"))
                             origens.append(vinculo.get("ORIGEM_MAP"))
 
@@ -324,20 +332,18 @@ class ECDProcessor:
 
         # 4. Limpeza final: ORIGEM_MAP deve ser vazio para contas SINTÉTICAS
         s_ind_final = cast(pd.Series, df_res["IND_CTA"])
-        mask_sintetica = (
-            s_ind_final.astype(str).str.upper() != "A"
-        )
+        mask_sintetica = s_ind_final.astype(str).str.upper() != "A"
         df_res.loc[mask_sintetica, "ORIGEM_MAP"] = ""
 
         if "CTA" in df_res.columns:
             df_res["CONTA"] = (
                 df_res["COD_CTA"].astype(str)
                 + " - "
-                + df_res["CTA"].astype(str).str.strip().str.upper() # type: ignore
+                + df_res["CTA"].astype(str).str.strip().str.upper()
             )
         # --- Cache: salva resultado para reuso dentro do mesmo ECD ---
-        self._cache_plano = df_res # type: ignore
-        return self._cache_plano # type: ignore
+        self._cache_plano = df_res
+        return self._cache_plano
 
     @monitor_task("ECDProcessor", "processar_lancamentos")
     def processar_lancamentos(self, df_plano: pd.DataFrame) -> pd.DataFrame:
@@ -497,17 +503,24 @@ class ECDProcessor:
             # Remove colunas técnicas e duplicatas de merges
             drop_cols = ["PK", "FK_PAI", "CNPJ_x", "CNPJ_y"]
             d = df.drop(columns=[c for c in drop_cols if c in df.columns]).copy()
-            
+
             # Limpeza Ouro: Remove separadores que quebram o CSV
             obj_cols = d.select_dtypes(include=["object"]).columns
-            d[obj_cols] = d[obj_cols].fillna("").astype(str).replace({";": " ", "\n": " ", "\r": " "}, regex=True)
-            
+            d[obj_cols] = (
+                d[obj_cols]
+                .fillna("")
+                .astype(str)
+                .replace({";": " ", "\n": " ", "\r": " "}, regex=True)
+            )
+
             # Garante CNPJ se estiver faltando
             if "CNPJ" not in d.columns:
                 d["CNPJ"] = self.cnpj
-                
+
             # Reordena: DT_FIN e CNPJ primeiro
-            cols = ["DT_FIN", "CNPJ"] + [c for c in d.columns if c not in ["DT_FIN", "CNPJ"]]
+            cols = ["DT_FIN", "CNPJ"] + [
+                c for c in d.columns if c not in ["DT_FIN", "CNPJ"]
+            ]
             return d.reindex(columns=cols)
 
         return {
@@ -556,8 +569,7 @@ class ECDProcessor:
 
         # Filtra apenas registros que possuem mapeamento referencial
         df_mapeado = df_mapeado[
-            df_mapeado["COD_CTA_REF"].notna()
-            & (df_mapeado["COD_CTA_REF"] != "")
+            df_mapeado["COD_CTA_REF"].notna() & (df_mapeado["COD_CTA_REF"] != "")
         ]
 
         if df_mapeado.empty:
@@ -570,121 +582,133 @@ class ECDProcessor:
             .reset_index()
         )
 
-        # 3. Consolidação Hierárquica no Plano Referencial
-        balancetes_rfb = []
+        # 3. Consolidação Hierárquica no Plano Referencial (Otimizado)
+        # Ao invés de iterar mês a mês (12 loops × N níveis = ~60 merges),
+        # monta a tabela completa e usa DT_FIN como chave de isolamento
+        # nos groupby/merge — resultado idêntico com ~N merges apenas.
         versoes_data = df_analitico_ref["DT_FIN"].unique()
-        for data in versoes_data:
-            df_mes = df_analitico_ref[df_analitico_ref["DT_FIN"] == data].copy()
+        if len(versoes_data) == 0:
+            return pd.DataFrame()
 
-            # Prepara a tabela base do mês com TODAS as contas do plano referencial
-            tab = df_ref_schema.copy()
-            tab = pd.merge(
-                tab,
+        # 3a. Tabela base: schema × todos os meses (LEFT JOIN preserva hierarquia)
+        tabs_meses = []
+        for data in versoes_data:
+            df_mes = df_analitico_ref[df_analitico_ref["DT_FIN"] == data]
+            tab_mes = df_ref_schema.copy()
+            tab_mes = pd.merge(
+                tab_mes,
                 df_mes,
                 left_on="CODIGO",
                 right_on="COD_CTA_REF",
                 how="left",
             )
+            tab_mes["DT_FIN"] = data
+            tabs_meses.append(tab_mes)
+        tab = pd.concat(tabs_meses, ignore_index=True)
+        del tabs_meses
 
-            # --- float64 vetorial: substitui apply(Decimal) ---
-            for col in cols_valores:
-                tab[col] = self._series_to_float(tab[col])
+        # Conversão numérica única (antes era feita 12×)
+        for col in cols_valores:
+            tab[col] = self._series_to_float(tab[col])
 
-            # Algoritmo Bottom-Up no Plano Referencial — Vetorizado
-            try:
-                tab["NIVEL"] = (
-                    cast(
-                        pd.Series,
-                        pd.to_numeric(tab["NIVEL"], errors="coerce"),
-                    )
-                    .fillna(0)
-                    .astype(int)
+        # 3b. Bottom-Up Rollup unificado (DT_FIN no groupby isola os meses)
+        try:
+            tab["NIVEL"] = (
+                cast(
+                    pd.Series,
+                    pd.to_numeric(tab["NIVEL"], errors="coerce"),
                 )
-                niveis = sorted(tab["NIVEL"].unique(), reverse=True)
-
-                for nivel in niveis:
-                    if nivel <= 1:
-                        continue
-
-                    # Agrega filhos e renomeia COD_SUP para CODIGO (chave do pai)
-                    agg = (
-                        tab[tab["NIVEL"] == nivel]
-                        .groupby("COD_SUP")[cols_valores]
-                        .sum()
-                        .reset_index()
-                        .rename(columns={"COD_SUP": "CODIGO"})
-                    )
-                    # Sufixo para evitar conflito de colunas no merge
-                    agg = agg.add_suffix("_AGG").rename(columns={"CODIGO_AGG": "CODIGO"})
-
-                    tab = tab.merge(agg, on="CODIGO", how="left")
-                    for col in cols_valores:
-                        tab[col] = tab[col].add(tab[f"{col}_AGG"].fillna(0.0))
-                        tab.drop(columns=[f"{col}_AGG"], inplace=True)
-            except Exception as e:
-                logger.error(f"Falha no rollup bottom-up do referencial: {e}")
-
-            tab["DT_FIN"] = data
-            if "COD_CTA_REF" in tab.columns:
-                tab.drop(columns=["COD_CTA_REF"], inplace=True)
-            balancetes_rfb.append(tab)
-
-        return (
-            pd.concat(balancetes_rfb, ignore_index=True)
-            if balancetes_rfb
-            else pd.DataFrame()
-        )
-
-    def _propagar_hierarquia(
-        self, df_saldos: pd.DataFrame, df_plano: pd.DataFrame
-    ) -> pd.DataFrame:
-        """Algoritmo Bottom-Up para consolidação de níveis sintéticos."""
-        balancetes = []
-        cols_valores = ["VL_SLD_INI_SIG", "VL_DEB", "VL_CRED", "VL_SLD_FIN_SIG"]
-
-        versoes_data = df_saldos["DT_FIN"].unique()
-        for data in versoes_data:
-            df_mes = df_saldos[df_saldos["DT_FIN"] == data].copy()
-            tab = pd.merge(
-                df_plano,
-                df_mes[cols_valores + ["COD_CTA", "CNPJ"]], # type: ignore
-                on="COD_CTA",
-                how="left",
+                .fillna(0)
+                .astype(int)
             )
-            # --- float64 vetorial: substitui apply(Decimal) ---
-            for col in cols_valores:
-                tab[col] = self._series_to_float(tab[col])
-
-            # Algoritmo Bottom-Up (Empresa) — Vetorizado
             niveis = sorted(tab["NIVEL"].unique(), reverse=True)
+
             for nivel in niveis:
-                if nivel == 1:
+                if nivel <= 1:
                     continue
 
                 agg = (
                     tab[tab["NIVEL"] == nivel]
-                    .groupby("COD_CTA_SUP")[cols_valores]
+                    .groupby(["COD_SUP", "DT_FIN"])[cols_valores]
                     .sum()
                     .reset_index()
-                    .rename(columns={"COD_CTA_SUP": "COD_CTA"})
+                    .rename(columns={"COD_SUP": "CODIGO"})
                 )
-                agg = agg.add_suffix("_AGG").rename(columns={"COD_CTA_AGG": "COD_CTA"})
+                rename_map = {col: f"{col}_AGG" for col in cols_valores}
+                agg = agg.rename(columns=rename_map)
 
-                tab = tab.merge(agg, on="COD_CTA", how="left")
+                tab = tab.merge(agg, on=["CODIGO", "DT_FIN"], how="left")
                 for col in cols_valores:
-                    tab[col] = tab[col].add(
-                        tab[f"{col}_AGG"].fillna(0.0)
-                    )
+                    tab[col] = tab[col].add(tab[f"{col}_AGG"].fillna(0.0))
                     tab.drop(columns=[f"{col}_AGG"], inplace=True)
+        except Exception as e:
+            logger.error(f"Falha no rollup bottom-up do referencial: {e}")
 
+        if "COD_CTA_REF" in tab.columns:
+            tab.drop(columns=["COD_CTA_REF"], inplace=True)
+
+        return tab
+
+    def _propagar_hierarquia(
+        self, df_saldos: pd.DataFrame, df_plano: pd.DataFrame
+    ) -> pd.DataFrame:
+        """Algoritmo Bottom-Up para consolidação de níveis sintéticos (Otimizado).
+
+        Ao invés de iterar mês a mês (12 loops × N níveis = ~60 merges),
+        monta a tabela completa e usa DT_FIN como chave de isolamento
+        nos groupby/merge — resultado idêntico com ~N merges apenas.
+        """
+        cols_valores = ["VL_SLD_INI_SIG", "VL_DEB", "VL_CRED", "VL_SLD_FIN_SIG"]
+
+        versoes_data = df_saldos["DT_FIN"].unique()
+        if len(versoes_data) == 0:
+            return pd.DataFrame()
+
+        # 1. Tabela base: plano × todos os meses (LEFT JOIN preserva hierarquia)
+        tabs_meses = []
+        for data in versoes_data:
+            df_mes = df_saldos[df_saldos["DT_FIN"] == data]
+            tab_mes = pd.merge(
+                df_plano,
+                df_mes[cols_valores + ["COD_CTA", "CNPJ"]],
+                on="COD_CTA",
+                how="left",
+            )
+            tab_mes["DT_FIN"] = data
+            tabs_meses.append(tab_mes)
+        tab = pd.concat(tabs_meses, ignore_index=True)
+        del tabs_meses
+
+        # Conversão numérica única (antes era feita 12×)
+        for col in cols_valores:
+            tab[col] = self._series_to_float(tab[col])
+
+        # 2. Bottom-Up Rollup unificado (DT_FIN no groupby isola os meses)
+        niveis = sorted(tab["NIVEL"].unique(), reverse=True)
+        for nivel in niveis:
+            if nivel == 1:
+                continue
+
+            agg = (
+                tab[tab["NIVEL"] == nivel]
+                .groupby(["COD_CTA_SUP", "DT_FIN"])[cols_valores]
+                .sum()
+                .reset_index()
+                .rename(columns={"COD_CTA_SUP": "COD_CTA"})
+            )
+            rename_map = {col: f"{col}_AGG" for col in cols_valores}
+            agg = agg.rename(columns=rename_map)
+
+            tab = tab.merge(agg, on=["COD_CTA", "DT_FIN"], how="left")
             for col in cols_valores:
-                tab[col] = tab[col].round(2)
-            tab["DT_FIN"] = data
-            balancetes.append(tab)
+                tab[col] = tab[col].add(tab[f"{col}_AGG"].fillna(0.0))
+                tab.drop(columns=[f"{col}_AGG"], inplace=True)
 
-        return (
-            pd.concat(balancetes, ignore_index=True) if balancetes else pd.DataFrame()
-        )
+        # 3. Arredondamento final (uma única passada)
+        for col in cols_valores:
+            tab[col] = tab[col].round(2)
+
+        return tab
 
     @monitor_task("ECDProcessor", "processar_demonstracoes")
     def processar_demonstracoes(self) -> Dict[str, pd.DataFrame]:
@@ -699,21 +723,29 @@ class ECDProcessor:
             cols_base = ["PK", "DT_FIN"]
             base = df_j005[[c for c in cols_base if c in df_j005.columns]].copy()
             base["CNPJ"] = self.cnpj
-            
-            cols_drop = ["PK_x", "PK_y", "PK", "FK_PAI"] # LINHA_ORIGEM preservada
+
+            cols_drop = ["PK_x", "PK_y", "PK", "FK_PAI"]  # LINHA_ORIGEM preservada
 
             if df_j100 is not None:
                 df_bp = pd.merge(base, df_j100, left_on="PK", right_on="FK_PAI")
-                df_bp.drop(columns=[c for c in cols_drop if c in df_bp.columns], inplace=True)
+                df_bp.drop(
+                    columns=[c for c in cols_drop if c in df_bp.columns], inplace=True
+                )
                 # Reordenamento dinâmico: DT_FIN e CNPJ primeiro, preservando o restante
-                cols_bp = ["DT_FIN", "CNPJ"] + [c for c in df_bp.columns if c not in ["DT_FIN", "CNPJ"]]
+                cols_bp = ["DT_FIN", "CNPJ"] + [
+                    c for c in df_bp.columns if c not in ["DT_FIN", "CNPJ"]
+                ]
                 res["BP"] = df_bp.reindex(columns=cols_bp)
 
             if df_j150 is not None:
                 df_dre = pd.merge(base, df_j150, left_on="PK", right_on="FK_PAI")
-                df_dre.drop(columns=[c for c in cols_drop if c in df_dre.columns], inplace=True)
+                df_dre.drop(
+                    columns=[c for c in cols_drop if c in df_dre.columns], inplace=True
+                )
                 # Reordenamento dinâmico: DT_FIN e CNPJ primeiro, preservando o restante
-                cols_dre = ["DT_FIN", "CNPJ"] + [c for c in df_dre.columns if c not in ["DT_FIN", "CNPJ"]]
+                cols_dre = ["DT_FIN", "CNPJ"] + [
+                    c for c in df_dre.columns if c not in ["DT_FIN", "CNPJ"]
+                ]
                 res["DRE"] = df_dre.reindex(columns=cols_dre)
 
         return res

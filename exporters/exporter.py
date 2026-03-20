@@ -2,9 +2,10 @@ import pandas as pd
 import os
 import time
 import logging
+from concurrent.futures import ThreadPoolExecutor, Future
 from datetime import datetime
 from typing import Dict, Optional
-from exporters.formatting import apply_region_format
+from exporters.formatting import apply_region_format, ensure_numeric_vl_cols
 from core.telemetry import monitor_task, TelemetryCollector
 
 
@@ -47,38 +48,50 @@ class ECDExporter:
         start_export = time.time()
         log_gerados = []
 
-        for nome_tabela, df in dicionario_dfs.items():
-            if df is None or df.empty:
-                continue
+        # Escritas paralelas (I/O-bound = ideal para threads)
+        futures: list[tuple[Future[None], str]] = []
 
-            nome_final = f"{prefixo}_{nome_tabela}" if prefixo else nome_tabela
+        with ThreadPoolExecutor() as pool:
+            for nome_tabela, df in dicionario_dfs.items():
+                if df is None or df.empty:
+                    continue
 
-            # 1. Exportação para PARQUET (sempre mantida para reprocessamento)
-            caminho_parquet = os.path.join(self.path_saida, f"{nome_final}.parquet")
-            df.to_parquet(caminho_parquet, index=False, engine="pyarrow")
-            log_gerados.append(f"PARQUET: {os.path.basename(caminho_parquet)}")
+                nome_final = f"{prefixo}_{nome_tabela}" if prefixo else nome_tabela
 
-            # 2. Exportação para CSV (substitui o antigo XLSX)
-            termos_csv = [
-                "BP",
-                "DRE",
-                "Balancete",
-                "Plano_Contas",
-                "Lancamentos_Contabeis",
-                "Saldos_Mensais",
-                "baseRFB",
-            ]
-            if any(term in nome_tabela for term in termos_csv):
-                caminho_csv = os.path.join(self.path_saida, f"{nome_final}.csv")
-                # Compatibilidade Excel PT-BR: Usando sep=";" e decimal="," com utf-8-sig
-                df.to_csv(
-                    caminho_csv,
-                    index=False,
-                    sep=";",
-                    decimal=",",
-                    encoding="utf-8-sig",
-                )
-                log_gerados.append(f"CSV:     {os.path.basename(caminho_csv)}")
+                # 1. Parquet (sempre)
+                caminho_parquet = os.path.join(self.path_saida, f"{nome_final}.parquet")
+                futures.append((
+                    pool.submit(df.to_parquet, caminho_parquet, index=False, engine="pyarrow"),
+                    f"PARQUET: {os.path.basename(caminho_parquet)}",
+                ))
+
+                # 2. CSV (seletivo)
+                termos_csv = [
+                    "BP", "DRE", "Balancete", "Plano_Contas",
+                    "Lancamentos_Contabeis", "Saldos_Mensais", "baseRFB",
+                ]
+                if any(term in nome_tabela for term in termos_csv):
+                    caminho_csv = os.path.join(self.path_saida, f"{nome_final}.csv")
+                    df_csv = (
+                        ensure_numeric_vl_cols(df)
+                        if any(t in nome_tabela for t in ["BP", "DRE"])
+                        else df
+                    )
+                    futures.append((
+                        pool.submit(
+                            df_csv.to_csv, caminho_csv,
+                            index=False, sep=";", decimal=",", encoding="utf-8-sig",
+                        ),
+                        f"CSV:     {os.path.basename(caminho_csv)}",
+                    ))
+
+            # Coleta resultados e logs
+            for future, log_entry in futures:
+                try:
+                    future.result()
+                    log_gerados.append(log_entry)
+                except Exception as e:
+                    logging.error(f"Erro na escrita de arquivo: {log_entry} — {e}")
 
         end_export = time.time()
         duracao = end_export - (tempo_inicio if tempo_inicio else start_export)

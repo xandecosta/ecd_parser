@@ -3,6 +3,7 @@ import pandas as pd
 import logging
 from typing import List, Set, Optional, Dict
 from core.telemetry import monitor_task, TelemetryCollector
+from exporters.formatting import ensure_numeric_vl_cols
 
 logger = logging.getLogger(__name__)
 
@@ -89,6 +90,15 @@ class ECDConsolidator:
 
         # 3. Processamento por Tabela
         for tabela, caminhos in sorted(mapeamento_tabelas.items()):
+            # --- Cache: pula tabela se consolidado já está atualizado ---
+            parquet_path = os.path.join(self.consolidated_dir, f"CONSOLIDADO_{tabela}.parquet")
+            if os.path.exists(parquet_path):
+                ts_consolidado = os.path.getmtime(parquet_path)
+                ts_mais_recente = max(os.path.getmtime(p) for p in caminhos)
+                if ts_consolidado >= ts_mais_recente:
+                    logger.info(f"      [Cache] {tabela}: consolidado atualizado, pulando.")
+                    continue
+
             logger.info(f"      Processando: {tabela} ({len(caminhos)} arquivos)")
             dfs: List[pd.DataFrame] = []
 
@@ -108,19 +118,27 @@ class ECDConsolidator:
 
             # Concatenação e Salvamento
             df_final = pd.concat(dfs, ignore_index=True)
-            del dfs # Limpeza explícita para ajudar o GC em tabelas grandes
+            del dfs  # Limpeza explícita para ajudar o GC em tabelas grandes
 
             # A. Parquet Consolidado (Cru)
-            parquet_path = os.path.join(self.consolidated_dir, f"CONSOLIDADO_{tabela}.parquet")
             df_final.to_parquet(parquet_path, index=False, engine="pyarrow")
 
             # B. CSV Consolidado (Apenas se elegível)
             if any(tabela.startswith(pre) or pre in tabela for pre in self._excel_eligible_prefixes):
                 csv_path = os.path.join(self.consolidated_dir, f"CONSOLIDADO_{tabela}.csv")
-                
+
+                # Para BP e DRE: garante que colunas VL_* são float64 antes do CSV
+                # para que decimal="," do pandas funcione corretamente.
+                # O Parquet (acima) preserva os dados sem regionalização.
+                df_csv = (
+                    ensure_numeric_vl_cols(df_final)
+                    if any(t in tabela for t in ["BP", "DRE"])
+                    else df_final
+                )
+
                 # Padrão Ouro: Compatibilidade Excel PT-BR (BOM + sep=';')
                 # Mantemos o dado como float (ponto decimal) para não quebrar leituras futuras
-                df_final.to_csv(
+                df_csv.to_csv(
                     csv_path,
                     index=False,
                     sep=";",
